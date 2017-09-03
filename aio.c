@@ -1,57 +1,82 @@
 #include <assert.h>
-#include <stdio.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
+
 #include "ioh.h"
 
 typedef struct AioEntry {
-    ioh_event *event;
+    int fd;
     void (*cb) (void *opaque);
     void *opaque;
 } AioEntry;
 
 static AioEntry aios[1024];
 
-void aio_add_wait_object(ioh_event *event, void (*cb) (void *opaque), void *opaque) {
+void aio_init(void)
+{
     for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
         AioEntry *e = &aios[i];
-        if (!e->event && __sync_bool_compare_and_swap(&e->event, NULL, event)) {
+        memset(e, 0, sizeof(*e));
+        e->fd = -1;
+    }
+}
+
+void aio_add_wait_object(int fd, void (*cb) (void *opaque), void *opaque) {
+    for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
+        AioEntry *e = &aios[i];
+        if (e->fd == -1 && __sync_bool_compare_and_swap(&e->fd, -1, fd)) {
             e->cb = cb;
             e->opaque = opaque;
             return;
         }
     }
+    assert(0);
 }
 
 void aio_wait(void)
 {
     fd_set fds;
     FD_ZERO(&fds);
-    int max = -1;
+    int max = ioh_fd();
+    FD_SET(ioh_fd(), &fds);
     for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
         AioEntry *e = &aios[i];
-        if (e->event) {
-            int fd = ioh_handle(e->event);
+        int fd = e->fd;
+        if (fd >= 0) {
             max = fd > max ? fd : max;
             FD_SET(fd, &fds);
         }
     }
 
-    if (max != -1) {
-
-        int r = select(max + 1, &fds, NULL, NULL, NULL);
-        assert(r >= 0);
-
+    int r = select(max + 1, &fds, NULL, NULL, NULL);
+    if (r > 0) {
+        if (FD_ISSET(ioh_fd(), &fds)) {
+            for (;;) {
+                ioh_event *event;
+                int r = read(ioh_fd(), &event, sizeof(event));
+                if (r < 0 && errno == EWOULDBLOCK) {
+                    break;
+                }
+                if (r != sizeof(event)) {
+                    assert(0);
+                }
+                ioh_event_reset(event);
+                if (event->cb) {
+                    event->cb(event->opaque);
+                    event->cb = NULL;
+                    event->opaque = NULL;
+                }
+            }
+        }
         for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
             AioEntry *e = &aios[i];
-            if (e->event) {
-                if (FD_ISSET(ioh_handle(e->event), &fds)) {
-                    ioh_event *event = e->event;
-                    ioh_event_reset(event);
-                    e->cb(e->opaque);
-                    __sync_bool_compare_and_swap(&e->event, event, NULL);
-                }
+            int fd = e->fd;
+            if (fd >= 0 && FD_ISSET(fd, &fds)) {
+                __sync_bool_compare_and_swap(&e->fd, fd, -1);
+                e->cb(e->opaque);
             }
         }
     }

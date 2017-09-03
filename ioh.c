@@ -3,57 +3,46 @@
 #include <unistd.h>
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <error.h>
 #include <errno.h>
 
 #include "ioh.h"
 
-int ioh_event_init(ioh_event *event) {
-    assert(event->valid != 0xfedeabe0);
-    int r = pipe2(event->fds, O_DIRECT | O_NONBLOCK);
-    assert(r >= 0);
-    event->state = 0;
-    event->valid = 0xfedeabe0;
+static int event_fds[2];
+int ioh_init(void)
+{
+    int r = pipe2(event_fds, O_DIRECT | O_NONBLOCK);
     return r;
 }
 
-int ioh_event_init_fd(ioh_event *event, int fd) {
-    assert(event->valid != 0xfedeabe0);
-    event->fds[0] = fd;
-    event->fds[1] = -1;
-    event->state = 0;
-    event->valid = 0xfedeabe0;
-    return 0;
+int ioh_fd(void)
+{
+    return event_fds[0];
+}
+
+void ioh_event_init(ioh_event *event) {
+    memset(event, 0, sizeof(*event));
 }
 
 void ioh_event_set(ioh_event *event) {
-    assert(event->valid == 0xfedeabe0);
     if (__sync_bool_compare_and_swap(&event->state, 0, 1)) {
-        char one = 1;
-        int r = write(event->fds[1], &one, sizeof(one));
-        if (r != sizeof(one)) {
+        int r = write(event_fds[1], &event, sizeof(event));
+        if (r != sizeof(event)) {
             printf("%s:%d r %d %s\n", __FUNCTION__, __LINE__, r, strerror(errno));
+            assert(0);
         }
-        assert(r == 1);
-    } else printf("%p already set\n", event);
+    }
+}
+
+void ioh_event_set_callback(ioh_event *event, void (*cb) (void *opaque), void *opaque)
+{
+    event->cb = cb;
+    event->opaque = opaque;
 }
 
 void ioh_event_reset(ioh_event *event) {
     if (__sync_bool_compare_and_swap(&event->state, 1, 0)) {
-        char one = 0;
-        int r = read(event->fds[0], &one, sizeof(one));
-        if (r != sizeof(one)) {
-            printf("%s:%d r %d %s\n", __FUNCTION__, __LINE__, r, strerror(errno));
-        }
-        assert(r == 1);
-        assert(one == 1);
     }
 }
-
-void ioh_event_close(ioh_event *event) {
-    close(event->fds[0]);
-    close(event->fds[1]);
-    event->valid = 0;
-}
-

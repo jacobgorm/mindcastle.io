@@ -17,17 +17,15 @@
 #include <unistd.h>
 
 #include "aio.h"
-#include "ioh.h"
 #include "block-swap.h"
+#include "ioh.h"
 
 struct sock_info {
-    ioh_event event;
     int sock;
 };
 
 struct BlockDriverState;
 struct client_info {
-    ioh_event event;
     struct BlockDriverState *bs;
     int sock;
 };
@@ -55,7 +53,7 @@ static void nbd_read_done(void *opaque, int ret) {
     free(ri->buffer);
     free(ri);
 
-    aio_add_wait_object(&ci->event, got_data, ci);
+    aio_add_wait_object(ci->sock, got_data, ci);
 }
 
 static void nbd_write_done(void *opaque, int ret) {
@@ -121,7 +119,7 @@ static void got_data(void *opaque)
                     assert(r >= 0);
                 }
                 swap_aio_write(ci->bs, offset / 512, buffer, len / 512, nbd_write_done, buffer);
-                aio_add_wait_object(&ci->event, got_data, ci);
+                aio_add_wait_object(ci->sock, got_data, ci);
 
                 break;
             }
@@ -130,20 +128,19 @@ static void got_data(void *opaque)
                 printf("default %x\n", ntohl(request.type));
                 r = write(ci->sock, &reply, sizeof(reply));
                 assert(r == sizeof(reply));
-                aio_add_wait_object(&ci->event, got_data, ci);
+                aio_add_wait_object(ci->sock, got_data, ci);
                 break;
             }
         };
     }
 }
 
+volatile int should_exit = 0;
 static BlockDriverState bs;
 
 void signal_handler(int s)
 {
-    swap_flush(&bs);
-    swap_close(&bs);
-    exit(1);
+    should_exit = 1;
 }
 
 int main(int argc, char **argv)
@@ -154,6 +151,9 @@ int main(int argc, char **argv)
     sigemptyset(&sig.sa_mask);
     sig.sa_flags = 0;
     sigaction(SIGINT, &sig, NULL);
+
+    ioh_init();
+    aio_init();
 
     swap_create("foo.swap", 100 << 20, 0);
     swap_open(&bs, "foo.swap", 0);
@@ -193,9 +193,8 @@ int main(int argc, char **argv)
 
     struct client_info *ci = malloc(sizeof(struct client_info));
     ci->sock = sp[0];
-    ioh_event_init_fd(&ci->event, ci->sock);
     ci->bs = &bs;
-    aio_add_wait_object(&ci->event, got_data, ci);
+    aio_add_wait_object(ci->sock, got_data, ci);
 
 
 #if 0
@@ -229,8 +228,11 @@ int main(int argc, char **argv)
 
     //uint8_t buf[8 * 512] = {1,};
     //swap_aio_write(&bs, 1, buf, 8, write_done, NULL);
-    for (;;) {
+    while (!should_exit) {
         aio_wait();
     }
+    swap_flush(&bs);
+    swap_close(&bs);
+    exit(1);
     return 0;
 }

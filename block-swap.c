@@ -1704,7 +1704,6 @@ next:
 }
 static void aio_release(SwapAIOCB *acb)
 {
-    ioh_event_close(&acb->event);
     free(acb);
 }
 
@@ -1819,13 +1818,7 @@ static SwapAIOCB *swap_aio_get(BlockDriverState *bs,
     acb = calloc(1, sizeof(*acb));
     acb->common.cb = cb;
     acb->common.opaque = opaque;
-    assert(acb);
-    if (!ioh_event_valid(&acb->event)) {
-        ioh_event_init(&acb->event);
-    } else {
-        printf("RECYCLE\n");
-        ioh_event_reset(&acb->event);
-    }
+    ioh_event_init(&acb->event);
     acb->bs = bs;
     acb->result = -1;
     acb->map = NULL;
@@ -2125,7 +2118,7 @@ BlockDriverAIOCB *swap_aio_read(BlockDriverState *bs,
         acb->buffer = buf;
         acb->tmp = tmp;
         acb->map = map;
-        aio_add_wait_object(&acb->event, swap_read_cb, acb);
+        ioh_event_set_callback(&acb->event, swap_read_cb, acb);
 
         __swap_queue_read_acb(bs, acb);
         swap_unlock(s);
@@ -2276,8 +2269,7 @@ static int __swap_nonblocking_write(BDRVSwapState *s, const uint8_t *buf,
             errx(1, "swap: OOM on line %d", __LINE__);
         }
 
-        printf("aio_add_wait_object line %d\n", __LINE__);
-        aio_add_wait_object(&acb->event, swap_rmw_cb, acb);
+        ioh_event_set_callback(&acb->event, swap_rmw_cb, acb);
 
         swap_lock(s);
         found = __swap_nonblocking_read(s, acb->tmp ? acb->tmp : acb->buffer,
@@ -2323,8 +2315,7 @@ static int __swap_nonblocking_write(BDRVSwapState *s, const uint8_t *buf,
                 return NULL;
             }
 
-            printf("aio_add_wait_object line %d\n", __LINE__);
-            aio_add_wait_object(&acb->event, swap_write_cb, acb);
+            ioh_event_set_callback(&acb->event, swap_write_cb, acb);
             acb->ratelimit_complete_timer = new_timer_ms(
                     rt_clock, swap_ratelimit_complete_timer_notify, acb);
             mod_timer(acb->ratelimit_complete_timer,
