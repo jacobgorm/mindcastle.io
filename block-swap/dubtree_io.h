@@ -48,12 +48,13 @@ static inline dubtree_handle_t
 dubtree_open_existing_readonly(const char *fn)
 {
     char tmp[256];
-    if (memcmp("http://", fn, 7) == 0) {
+    if (!memcmp("http://", fn, 7) || !memcmp("https://", fn, 8)) {
 
         const char *end = fn + strlen(fn);
         while (*end != '/') {
             --end;
         }
+        ++end;
 
         sprintf(tmp, "/home/jacob/dev/oneroot/cache/%s", end);
         char *cmd;
