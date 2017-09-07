@@ -2338,7 +2338,6 @@ static int __swap_nonblocking_write(BDRVSwapState *s, const uint8_t *buf,
 #if 1
 int swap_flush(BlockDriverState *bs)
 {
-    debug_printf("%s\n", __FUNCTION__);
     BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
     LruCache *bc = &s->bc;
     SwapAIOCB *acb, *next;
@@ -2350,7 +2349,9 @@ int swap_flush(BlockDriverState *bs)
     /* Wait for all outstanding ios completing. */
     //aio_wait_start();
     //aio_poll();
-    debug_printf("swap: finishing %d outstanding IOs\n", s->ios_outstanding);
+    if (s->ios_outstanding > 0) {
+        debug_printf("swap: finishing %d outstanding IOs\n", s->ios_outstanding);
+    }
     while (s->ios_outstanding) {
         TAILQ_FOREACH_SAFE(acb, &s->rlimit_write_queue, rlimit_write_entry,
                            next)
@@ -2360,7 +2361,7 @@ int swap_flush(BlockDriverState *bs)
     //aio_wait_end();
 #endif
 
-    debug_printf("swap: emptying cache lines\n");
+    //debug_printf("swap: emptying cache lines\n");
     swap_lock(s);
     for (i = 0; i < (1 << bc->log_lines); ++i) {
         LruCacheLine *cl = &bc->lines[i];
@@ -2378,7 +2379,7 @@ int swap_flush(BlockDriverState *bs)
     s->flush = 1;
     swap_unlock(s);
 
-    debug_printf("swap: wait for all writes to complete\n");
+    //debug_printf("swap: wait for all writes to complete\n");
     for (;;) {
         uint32_t load;
         swap_lock(s);
@@ -2390,7 +2391,7 @@ int swap_flush(BlockDriverState *bs)
         swap_signal_write(s);
         swap_wait_all_flushed(s);
     }
-    debug_printf("swap: finished waiting for write threads\n");
+    //debug_printf("swap: finished waiting for write threads\n");
 
     assert(s->pqs[0].n_heap == 0);
     assert(s->pqs[1].n_heap == 0);
@@ -2432,8 +2433,8 @@ int swap_flush(BlockDriverState *bs)
     s->flush = 0;
     swap_unlock(s);
 
-    debug_printf("%s done, %d allocs\n", __FUNCTION__,
-            __sync_fetch_and_add(&s->alloced, 0));
+    //debug_printf("%s done, %d allocs\n", __FUNCTION__,
+            //__sync_fetch_and_add(&s->alloced, 0));
     return 0;
 }
 #endif
