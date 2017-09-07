@@ -151,6 +151,12 @@ void signal_handler(int s)
 
 int main(int argc, char **argv)
 {
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s [filename.swap]\n", argv[0]);
+        exit(1);
+    }
+
+    char *fn = argv[1];
     int r;
     struct sigaction sig;
     sig.sa_handler = signal_handler;
@@ -162,8 +168,8 @@ int main(int argc, char **argv)
     ioh_init();
     aio_init();
 
-    if (!file_exists("foo.swap")) {
-        swap_create("foo.swap", 100 << 20, 0);
+    if (!file_exists(fn)) {
+        swap_create(fn, 100 << 20, 0);
     }
     swap_open(&bs, "foo.swap", 0);
 
