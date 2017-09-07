@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include "ioh.h"
@@ -36,7 +37,7 @@ void aio_add_wait_object(int fd, void (*cb) (void *opaque), void *opaque) {
     assert(0);
 }
 
-void aio_wait(void)
+int aio_wait(void)
 {
     fd_set fds;
     FD_ZERO(&fds);
@@ -51,7 +52,8 @@ void aio_wait(void)
         }
     }
 
-    int r = select(max + 1, &fds, NULL, NULL, NULL);
+    struct timeval tv = {5, 0};
+    int r = select(max + 1, &fds, NULL, NULL, &tv);
     if (r > 0) {
         if (FD_ISSET(ioh_fd(), &fds)) {
             for (;;) {
@@ -80,4 +82,5 @@ void aio_wait(void)
             }
         }
     }
+    return r;
 }

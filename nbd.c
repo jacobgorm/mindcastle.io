@@ -137,11 +137,16 @@ static void got_data(void *opaque)
 }
 
 volatile int should_exit = 0;
+volatile int should_flush = 0;
 static BlockDriverState bs;
 
 void signal_handler(int s)
 {
-    should_exit = 1;
+    if (s == 2) {
+        should_exit = 1;
+    } else if (s == 1) {
+        should_flush = 1;
+    }
 }
 
 int main(int argc, char **argv)
@@ -151,6 +156,7 @@ int main(int argc, char **argv)
     sig.sa_handler = signal_handler;
     sigemptyset(&sig.sa_mask);
     sig.sa_flags = 0;
+    sigaction(SIGHUP, &sig, NULL);
     sigaction(SIGINT, &sig, NULL);
 
     ioh_init();
@@ -232,7 +238,10 @@ int main(int argc, char **argv)
     //uint8_t buf[8 * 512] = {1,};
     //swap_aio_write(&bs, 1, buf, 8, write_done, NULL);
     while (!should_exit) {
-        aio_wait();
+        if (aio_wait() == 0 || should_flush) {
+            swap_flush(&bs);
+            should_flush = 0;
+        }
     }
     swap_flush(&bs);
     swap_close(&bs);
