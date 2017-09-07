@@ -16,6 +16,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+#include "config.h"
 #include "aio.h"
 #include "block-swap.h"
 #include "ioh.h"
@@ -155,7 +156,9 @@ int main(int argc, char **argv)
     ioh_init();
     aio_init();
 
-    swap_create("foo.swap", 100 << 20, 0);
+    if (!file_exists("foo.swap")) {
+        swap_create("foo.swap", 100 << 20, 0);
+    }
     swap_open(&bs, "foo.swap", 0);
 
     int sp[2];

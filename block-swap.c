@@ -1148,7 +1148,7 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
         const char *fb = s->fallbacks[i];
         debug_printf("swap: fallback %d %s\n", i, fb);
         if (!file_exists(fb)) {
-            errx(1, "swap: fallback %s does not exist!", fb);
+            warn("swap: fallback %s does not exist!", fb);
         }
     }
 
