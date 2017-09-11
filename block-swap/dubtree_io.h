@@ -59,7 +59,6 @@ dubtree_open_existing_readonly(const char *fn)
         sprintf(tmp, "/home/jacob/dev/oneroot/cache/%s", end);
         char *cmd;
         asprintf(&cmd, "/usr/bin/wget -O %s %s", tmp, fn);
-        printf("cmd: %s\n", cmd);
         FILE *p = popen(cmd, "r");
         assert(p);
         free(cmd);
@@ -166,7 +165,6 @@ int dubtree_pread(dubtree_handle_t f, void *buf, size_t sz, uint64_t offset)
 
 static inline int
 dubtree_pwrite(dubtree_handle_t f, const void *buf, size_t sz, uint64_t offset)
-
 {
 #ifdef _WIN32
     DWORD wrote = 0;
