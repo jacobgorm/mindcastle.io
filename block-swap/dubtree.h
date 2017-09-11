@@ -12,13 +12,14 @@
 #include "lrucache.h"
 
 #define DUBTREE_MAX_FALLBACKS 8
+#define DUBTREE_HASH_SIZE (512/8)
 
 /* The per-instance in-memory representation of a dubtree. */
 
 typedef struct {
     union {
         uint64_t first64;
-        uint8_t full[20];
+        uint8_t full[DUBTREE_HASH_SIZE];
     } id;
 } chunk_id_t;
 

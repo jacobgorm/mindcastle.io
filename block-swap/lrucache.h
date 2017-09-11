@@ -7,6 +7,7 @@ typedef struct LruCacheLine {
     int users;
     int delete;
     int dirty;
+    void *opaque;
 } LruCacheLine;
 
 typedef struct LruCache {

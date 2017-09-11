@@ -1,14 +1,15 @@
 cmake_minimum_required(VERSION 3.4)
 
 set(CMAKE_C_FLAGS "-Wall -Werror -Ofast -Wfatal-errors -g")
-#add_definitions(-DPTHREAD_BARRIER_SERIAL_THREAD)
 
 #set (SANITIZE 1)
 if (SANITIZE)
 set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer -g")
 endif()
 
-include_directories("${CMAKE_SOURCE_DIR}")
+include_directories(
+    "${CMAKE_SOURCE_DIR}"
+)
 
 add_executable(oneroot
     block-swap.c
@@ -18,6 +19,7 @@ add_executable(oneroot
     block-swap/dubtree.c
     block-swap/hashtable.c
     block-swap/simpletree.c
+    block-swap/b2.c
     )
 
-target_link_libraries(oneroot -lpthread -llz4 -luuid)
+target_link_libraries(oneroot -lb2 -lpthread -llz4 -luuid)
