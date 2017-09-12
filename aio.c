@@ -67,9 +67,12 @@ int aio_wait(void)
                 }
                 ioh_event_reset(event);
                 if (event->cb) {
-                    event->cb(event->opaque);
+                    void (*cb) (void *opaque) = event->cb;
+                    void *opaque = event->opaque;
                     event->cb = NULL;
                     event->opaque = NULL;
+                    /* event may no longer be valid after callback */
+                    cb(opaque);
                 }
             }
         }
