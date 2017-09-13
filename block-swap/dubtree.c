@@ -556,13 +556,15 @@ static inline int add_chunk_id(UserData **pud)
     return ud->num_chunks;
 }
 
-static inline void set_chunk_id(UserData *ud, chunk_id_t chunk_id)
+static inline void set_chunk_id(UserData *ud, int chunk, chunk_id_t chunk_id)
 {
-    ud->chunk_ids[ud->num_chunks - 1] = chunk_id;
+    assert(chunk - 1 >= 0 && chunk - 1 < ud->num_chunks);
+    ud->chunk_ids[chunk - 1] = chunk_id;
 }
 
 static inline chunk_id_t get_chunk_id(const UserData *ud, int chunk)
 {
+    assert(chunk - 1 >= 0 && chunk - 1 < ud->num_chunks);
     return ud->chunk_ids[chunk - 1];
 }
 
@@ -951,9 +953,9 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
             hashtable_insert(&t->ht, chunk_id.id.first64, line);
         } else {
 #ifdef _WIN32
-            Werr(1, "open chunk=%"PRIx64" failed, fn=%s", chunk_id.id.first64, fn);
+            Werr(1, "open chunk=%"PRIx64" failed, fn=%s", be64toh(chunk_id.id.first64), fn);
 #else
-            err(1, "open chunk=%"PRIx64" failed, fn=%s", chunk_id.id.first64, fn);
+            err(1, "open chunk=%"PRIx64" failed, fn=%s", be64toh(chunk_id.id.first64), fn);
 #endif
         }
         free(fn);
@@ -1299,7 +1301,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
 
                 hashtable_insert(&keep, last_chunk_id.id.first64, 0);
                 int chunk = add_chunk_id(&ud);
-                set_chunk_id(ud, last_chunk_id);
+                set_chunk_id(ud, chunk, last_chunk_id);
                 for (q = 0; q < n_buffered; ++q) {
                     e = &buffered[q];
                     insert_kv(&st, e->key, chunk, e->offset, e->size);
@@ -1333,7 +1335,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
                         offset0 = e->offset + e->size;
 
                         out_id = write_chunk(t, out, values, b);
-                        set_chunk_id(ud, out_id);
+                        set_chunk_id(ud, out_chunk, out_id);
                         out = NULL;
                         b0 = b = 0;
                     }
@@ -1348,7 +1350,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
         if (done) {
             if (out) {
                 out_id = write_chunk(t, out, values, b);
-                set_chunk_id(ud, out_id);
+                set_chunk_id(ud, out_chunk, out_id);
                 out = NULL;
             }
             break;
