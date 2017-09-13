@@ -1952,6 +1952,7 @@ static int __swap_dubtree_read(BDRVSwapState *s, SwapAIOCB *acb)
      * error. */
 
     /* 'sizes' array must be initialized with zeroes. */
+    /* XXX we leak sizes! */
     sizes = calloc(end - start, sizeof(sizes[0]));
     if (!sizes) {
         errx(1, "OOM error %s line %d", __FUNCTION__, __LINE__);
