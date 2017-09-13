@@ -12,7 +12,7 @@
 #include "lrucache.h"
 
 #define DUBTREE_MAX_FALLBACKS 8
-#define DUBTREE_HASH_SIZE (512/8)
+#define DUBTREE_HASH_SIZE (256/8)
 
 /* The per-instance in-memory representation of a dubtree. */
 
