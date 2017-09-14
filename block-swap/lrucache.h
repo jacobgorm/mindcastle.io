@@ -44,6 +44,7 @@ static inline void lruCacheClose(LruCache *fc)
         if (cl->users) {
             printf("leaked cache line %d\n", i);
         }
+        free(cl->opaque);
     }
     free(fc->bits);
     free(fc->lines);
