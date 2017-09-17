@@ -553,19 +553,18 @@ static inline int add_chunk_id(UserData **pud)
             return -1;
         }
     }
-    return ud->num_chunks;
+    return n;
 }
 
 static inline void set_chunk_id(UserData *ud, int chunk, chunk_id_t chunk_id)
 {
-    assert(chunk - 1 >= 0 && chunk - 1 < ud->num_chunks);
-    ud->chunk_ids[chunk - 1] = chunk_id;
+    assert(chunk >= 0);
+    ud->chunk_ids[chunk] = chunk_id;
 }
 
 static inline chunk_id_t get_chunk_id(const UserData *ud, int chunk)
 {
-    assert(chunk - 1 >= 0 && chunk - 1 < ud->num_chunks);
-    return ud->chunk_ids[chunk - 1];
+    return ud->chunk_ids[chunk];
 }
 
 static inline size_t ud_size(const UserData *cud, size_t n)
@@ -1283,7 +1282,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
     memset(last_chunk_id.id.full, 0xff, sizeof(last_chunk_id.id.full));
     Chunk *out = NULL;
     chunk_id_t out_id = {};
-    int out_chunk;
+    int out_chunk = -1;
     struct buf_elem *e;
 
     for (done = 0;;) {
@@ -1336,6 +1335,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
 
                         out_id = write_chunk(t, out, values, b);
                         set_chunk_id(ud, out_chunk, out_id);
+                        out_chunk = -1;
                         out = NULL;
                         b0 = b = 0;
                     }
@@ -1351,6 +1351,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
             if (out) {
                 out_id = write_chunk(t, out, values, b);
                 set_chunk_id(ud, out_chunk, out_id);
+                out_chunk = -1;
                 out = NULL;
             }
             break;
