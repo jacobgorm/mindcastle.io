@@ -57,6 +57,7 @@ int dubtree_init(DubTree *t, char **fallbacks,
         malloc_callback malloc_cb, free_callback free_cb,
         void *opaque)
 {
+    int i;
     char *fn;
     char **fb;
     DubTreeHeader *header;
@@ -128,7 +129,7 @@ int dubtree_init(DubTree *t, char **fallbacks,
 
     header = m;
     t->header = header;
-    t->levels = header->buffers[0].levels;
+    t->levels = header->levels;
 
     if (!t->header->dubtree_initialized) {
 
@@ -149,7 +150,9 @@ int dubtree_init(DubTree *t, char **fallbacks,
     }
 
     if (!t->header->dubtree_initialized) {
-        memset(header->buffers, 0, sizeof(header->buffers));
+        for (i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
+            clear_chunk_id(&t->levels[i]);
+        }
 
         /* Magic header and version number. */
         t->header->magic = DUBTREE_FILE_MAGIC_MMAP;
@@ -896,9 +899,7 @@ static inline char *name_chunk(const char *prefix, chunk_id_t chunk_id)
     char *fn;
     const size_t len = 2 * sizeof(chunk_id.id.full);
     char h[1 + len];
-    h[len] = '\0';
     hex(h, chunk_id.id.full, sizeof(chunk_id.id.full));
-    assert(h[len] == '\0');
     h[len] = '\0';
     asprintf(&fn, "%s/%s.lvl", prefix, h);
     return fn;
@@ -1461,28 +1462,17 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
         }
     }
 
-    chunk_id_t *levels;
-    DubTreeLevels *buffer;
-    uint64_t version;
-    if (t->levels == t->header->buffers[0].levels) {
-        version = t->header->buffers[0].version;
-        buffer = &t->header->buffers[1];
-    } else {
-        version = t->header->buffers[1].version;
-        buffer = &t->header->buffers[0];
-    }
-    levels = buffer->levels;
-    memcpy(levels, t->levels, sizeof(t->header->buffers[0].levels));
-
     for (j = i; j >= 0; --j) {
         SimpleTree *st = &trees[j];
         chunk_id_t chunk_id = t->levels[j];
 
+        // XXX XXX no longer atomic!
         if (dest == j) {
-            levels[j] = tree_chunk;
+            t->levels[j] = tree_chunk;
         } else {
-            clear_chunk_id(&levels[j]);
+            clear_chunk_id(&t->levels[j]);
         }
+        __sync_synchronize();
 
         if (valid_chunk_id(&chunk_id)) {
             if (j != i) {
@@ -1500,12 +1490,6 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
             __put_chunk(t, tree_handles[j], tree_lines[j]);
             __free_chunk(t, chunk_id);
         }
-    }
-    if (!__sync_bool_compare_and_swap(&buffer->version, buffer->version, 1 + version)) {
-        errx(1, "CAS failure on line %d\n", __LINE__);
-    }
-    if (!__sync_bool_compare_and_swap(&t->levels, t->levels, levels)) {
-        errx(1, "CAS failure on line %d\n", __LINE__);
     }
     critical_section_leave(&t->cache_lock);
     critical_section_leave(&t->write_lock);

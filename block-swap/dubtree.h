@@ -39,11 +39,6 @@ static inline int valid_chunk_id(const chunk_id_t *chunk_id)
     return !cmp_chunk_ids(&nil, chunk_id);
 }
 
-typedef struct DubTreeLevels {
-    volatile uint64_t version;
-    chunk_id_t levels[DUBTREE_MAX_LEVELS];
-} DubTreeLevels;
-
 typedef struct DubTreeHeader {
     uint32_t magic, version;
     uint32_t dubtree_m;
@@ -51,7 +46,7 @@ typedef struct DubTreeHeader {
     uint32_t dubtree_max_levels;
     uint32_t dubtree_initialized;
     volatile uint64_t out_chunk;
-    DubTreeLevels buffers[2];
+    chunk_id_t levels[DUBTREE_MAX_LEVELS];
 } DubTreeHeader;
 
 typedef void (*read_callback) (void *opaque, int result);
@@ -61,7 +56,7 @@ typedef void (*free_callback) (void *opaque, void *ptr);
 typedef struct DubTree {
     critical_section write_lock;
     DubTreeHeader *header;
-    const chunk_id_t *levels;
+    /*volatile*/ chunk_id_t *levels;
 
     char *fallbacks[DUBTREE_MAX_FALLBACKS + 1];
     critical_section cache_lock;
