@@ -1724,6 +1724,7 @@ static inline void swap_common_cb(SwapAIOCB *acb)
                      rlimit_write_entry);
     }
     //aio_del_wait_object(&acb->event);
+    free(acb->sizes);
     aio_release(acb);
 }
 
