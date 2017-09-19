@@ -90,7 +90,7 @@ dubtree_open_new(const char *fn, int temp)
             0, NULL,
             OPEN_ALWAYS, flags, NULL);
 #else
-    int f = open(fn, O_RDWR | O_CREAT | O_NOATIME, 0644);
+    int f = open(fn, O_RDWR | O_CREAT | O_EXCL | O_NOATIME, 0644);
     return f < 0 ? DUBTREE_INVALID_HANDLE : f;
 #endif
 }

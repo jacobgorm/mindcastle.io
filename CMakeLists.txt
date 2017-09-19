@@ -20,6 +20,7 @@ add_executable(oneroot
     block-swap/hashtable.c
     block-swap/simpletree.c
     block-swap/b2.c
+    block-swap/cbf.c
     )
 
 target_link_libraries(oneroot -lb2 -lpthread -llz4 -luuid)
