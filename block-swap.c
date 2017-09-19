@@ -2447,9 +2447,11 @@ void swap_close(BlockDriverState *bs)
     BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
     int i;
 
+#if 0
     printf("checking...\n");
     dubtree_sanity_check(&s->t);
     printf("checking done\n");
+#endif
 
     /* Signal write thread to quit and wait for it. */
     s->quit = 1;
