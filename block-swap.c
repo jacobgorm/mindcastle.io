@@ -115,9 +115,10 @@ extern HRESULT WINAPI FilterConnectCommunicationPort(
 uint64_t log_swap_fills = 0;
 static int swap_backend_active = 0;
 
-#if !defined(LIBIMG) && defined(CONFIG_DUMP_SWAP_STAT)
+//#if !defined(LIBIMG) && defined(CONFIG_DUMP_SWAP_STAT)
   #define SWAP_STATS
-#endif
+//#endif
+#define SCALE_MS 1000
 
 #define SWAP_SECTOR_SIZE DUBTREE_BLOCK_SIZE
 #ifdef LIBIMG

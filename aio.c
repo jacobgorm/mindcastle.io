@@ -37,6 +37,8 @@ void aio_add_wait_object(int fd, void (*cb) (void *opaque), void *opaque) {
     assert(0);
 }
 
+extern void dump_swapstat(void);
+
 int aio_wait(void)
 {
     fd_set fds;
@@ -81,6 +83,8 @@ int aio_wait(void)
                 e->cb(e->opaque);
             }
         }
+    } else {
+        dump_swapstat();
     }
     return r;
 }

@@ -98,6 +98,14 @@ critical_section_leave(critical_section *cs)
     }
 }
 
+#include <sys/time.h>
+static inline uint64_t os_get_clock(void)
+{
+    struct timeval time;
+    gettimeofday(&time,0);
+    return (1000000 * time.tv_sec + time.tv_usec);
+}
+
 #define page_align_alloc malloc
 #define page_align_free free
 #define align_alloc malloc
