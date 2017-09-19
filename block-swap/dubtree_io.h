@@ -199,7 +199,7 @@ static inline int dubtree_mkdir(const char *dn)
 #ifdef _WIN32
     return CreateDirectory(dn, NULL) ? 0 : -1;
 #else
-    return mkdir(dn, 0700);
+    return mkdir(dn, 0755);
 #endif
 
 }
