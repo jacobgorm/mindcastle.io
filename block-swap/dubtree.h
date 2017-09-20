@@ -45,8 +45,6 @@ typedef struct DubTreeHeader {
     uint32_t dubtree_m;
     uint32_t dubtree_slot_size;
     uint32_t dubtree_max_levels;
-    uint32_t dubtree_initialized;
-    volatile uint64_t out_chunk;
     chunk_id_t levels[DUBTREE_MAX_LEVELS];
 } DubTreeHeader;
 

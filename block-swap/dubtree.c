@@ -12,7 +12,7 @@
 
 #define DUBTREE_FILE_MAGIC_MMAP 0x73776170
 
-#define DUBTREE_FILE_VERSION 13
+#define DUBTREE_FILE_VERSION 14
 
 #define DUBTREE_MMAPPED_NAME "top.lvl"
 
@@ -138,7 +138,7 @@ int dubtree_init(DubTree *t, char **fallbacks,
     t->header = header;
     t->levels = header->levels;
 
-    if (!t->header->dubtree_initialized) {
+    if (!t->header->magic) {
 
         char **fb = t->fallbacks + 1;
         f = DUBTREE_INVALID_HANDLE;
@@ -156,7 +156,8 @@ int dubtree_init(DubTree *t, char **fallbacks,
         }
     }
 
-    if (!t->header->dubtree_initialized) {
+    if (!t->header->magic) {
+
         for (i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
             clear_chunk_id(&t->levels[i]);
         }
@@ -169,8 +170,6 @@ int dubtree_init(DubTree *t, char **fallbacks,
         t->header->dubtree_max_levels = DUBTREE_MAX_LEVELS;
 
         __sync_synchronize();
-        t->header->dubtree_initialized = 1;
-        __sync_synchronize();
     }
 
     /* Check that shared data structure matches current version and
@@ -179,16 +178,7 @@ int dubtree_init(DubTree *t, char **fallbacks,
         (t->header->version == DUBTREE_FILE_VERSION) &&
         (t->header->dubtree_slot_size == DUBTREE_SLOT_SIZE) &&
         (t->header->dubtree_max_levels == DUBTREE_MAX_LEVELS)) {
-
         populate_cbf(t, 0);
-
-#if 0
-        for (i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
-            if (valid_chunk_id(&t->levels[i])) {
-                printf("level %d = %"PRIu64"\n", i, t->levels[i]);
-            }
-        }
-#endif
         return 0;
     } else {
         printf("mismatched dubtree header!\n");
