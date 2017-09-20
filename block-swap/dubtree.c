@@ -197,8 +197,8 @@ dubtree_quiesce(DubTree *t)
 {
 }
 
-static void __put_chunk(DubTree *t, dubtree_handle_t f, int line);
-static void put_chunk(DubTree *t, dubtree_handle_t f, int line);
+static void __put_chunk(DubTree *t, int line);
+static void put_chunk(DubTree *t, int line);
 static dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id,
                                        int dirty, int *l);
 static dubtree_handle_t get_chunk(DubTree *t, chunk_id_t chunk_id,
@@ -487,7 +487,7 @@ int flush_reads(DubTree *t, Chunk *c, const uint8_t *chunk0, CallbackState *cs)
             f = get_chunk(t, cr->chunk_id, 0, &l);
             if (f != DUBTREE_INVALID_HANDLE) {
                 r = flush_chunk(t, c->buf, f, cr, cs);
-                put_chunk(t, f, l);
+                put_chunk(t, l);
             } else {
                 free(cr->reads);
                 r = -1;
@@ -583,7 +583,6 @@ static inline size_t ud_size(const UserData *cud, size_t n)
 static int populate_cbf(DubTree *t, int n)
 {
     SimpleTree trees[DUBTREE_MAX_LEVELS] = {};
-    dubtree_handle_t files[DUBTREE_MAX_LEVELS] = {};
     int lines[DUBTREE_MAX_LEVELS] = {};
     int added = 0;
 
@@ -617,7 +616,7 @@ static int populate_cbf(DubTree *t, int n)
                 ++added;
             }
             unmap_tree(st->mem, simpletree_get_nodes_size(st));
-            put_chunk(t, files[i], lines[i]);
+            put_chunk(t, lines[i]);
         }
     }
 
@@ -658,7 +657,7 @@ void dubtree_end_find(DubTree *t, void *ctx)
         if (valid_chunk_id(&ct->chunk)) {
             unmap_tree(ct->st.mem, simpletree_get_nodes_size(&ct->st));
             clear_chunk_id(&ct->chunk);
-            put_chunk(t, ct->f, ct->line);
+            put_chunk(t, ct->line);
         }
     }
 #ifdef _WIN32
@@ -746,7 +745,7 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
                 unmap_tree(ct->st.mem, simpletree_get_nodes_size(&ct->st));
                 clear_chunk_id(&ct->chunk);
                 if (ct->f != DUBTREE_INVALID_HANDLE) {
-                    __put_chunk(t, ct->f, ct->line);
+                    __put_chunk(t, ct->line);
                     ct->f = DUBTREE_INVALID_HANDLE;
                 }
             } else {
@@ -1056,7 +1055,7 @@ static int unlink_chunk(DubTree *t, chunk_id_t chunk_id, dubtree_handle_t f)
     return 0;
 }
 
-static inline void __put_chunk(DubTree *t, dubtree_handle_t _f, int line)
+static inline void __put_chunk(DubTree *t, int line)
 {
     LruCacheLine *cl = &t->lru.lines[line];
     chunk_id_t chunk_id = {};
@@ -1069,7 +1068,6 @@ static inline void __put_chunk(DubTree *t, dubtree_handle_t _f, int line)
             chunk_id = *pid;
             free(pid);
             f = (dubtree_handle_t) cl->value;
-            assert(f == _f);
             hashtable_delete(&t->ht, cl->key);
             delete = 1;
             memset(cl, 0, sizeof(*cl));
@@ -1081,10 +1079,10 @@ static inline void __put_chunk(DubTree *t, dubtree_handle_t _f, int line)
     }
 }
 
-static void put_chunk(DubTree *t, dubtree_handle_t f, int line)
+static void put_chunk(DubTree *t, int line)
 {
     critical_section_enter(&t->cache_lock);
-    __put_chunk(t, f, line);
+    __put_chunk(t, line);
     critical_section_leave(&t->cache_lock);
 }
 
@@ -1179,7 +1177,7 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
 out:
     free(c);
     if (l >= 0) {
-        put_chunk(t, f, l);
+        put_chunk(t, l);
     }
     return chunk_id;
 }
@@ -1220,7 +1218,6 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
     SimpleTree *existing;
     const UserData *cud;
     const UserData *old_ud;
-    dubtree_handle_t tree_handles[DUBTREE_MAX_LEVELS];
     int tree_lines[DUBTREE_MAX_LEVELS];
 
     uint64_t slot_size = DUBTREE_SLOT_SIZE;
@@ -1260,7 +1257,6 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
                 err(1, "get_chunk failed");
 #endif
             }
-            tree_handles[i] = f;
             simpletree_open(existing, map_tree(f));
 
             cud = simpletree_get_user(existing);
@@ -1516,7 +1512,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
         return -1;
     }
     dubtree_pwrite(f, st.mem, simpletree_get_nodes_size(&st), 0);
-    put_chunk(t, f, l);
+    put_chunk(t, l);
     simpletree_clear(&st);
 
     critical_section_enter(&t->cache_lock);
@@ -1555,7 +1551,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
             }
 
             unmap_tree(st->mem, simpletree_get_nodes_size(st));
-            __put_chunk(t, tree_handles[j], tree_lines[j]);
+            __put_chunk(t, tree_lines[j]);
             __free_chunk(t, chunk_id);
         }
     }
@@ -1593,7 +1589,7 @@ int dubtree_delete(DubTree *t)
             }
 
             unmap_tree(st.mem, simpletree_get_nodes_size(&st));
-            __put_chunk(t, f, line);
+            __put_chunk(t, line);
             __free_chunk(t, chunk_id);
         }
     }
@@ -1663,7 +1659,7 @@ int dubtree_sanity_check(DubTree *t)
                 }
                 got = dubtree_pread(cf, in, k.value.size, k.value.offset);
                 assert(got == k.value.size);
-                put_chunk(t, cf, l);
+                put_chunk(t, l);
 
                 int sz = k.value.size;
                 if (sz < DUBTREE_BLOCK_SIZE) {
@@ -1679,7 +1675,7 @@ int dubtree_sanity_check(DubTree *t)
                 simpletree_next(&st, &it);
             }
             unmap_tree(st.mem, simpletree_get_nodes_size(&st));
-            put_chunk(t, f, line);
+            put_chunk(t, line);
         }
     }
     return 0;
