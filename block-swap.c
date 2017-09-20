@@ -926,11 +926,12 @@ static inline void close_file(HANDLE f)
 
 #else
 /* See comment for win32 version above. */
-int swap_map_file(int file,
+int swap_map_file(dubtree_handle_t f,
         uint64_t offset,
         uint64_t length,
         SwapMappedFile *mf)
 {
+    int file = f.fd;
     struct stat st;
     static uint64_t granularity = 0;
 
@@ -965,15 +966,16 @@ void swap_unmap_file(SwapMappedFile *mf)
     munmap(mf->mapping, mf->size);
 }
 
-static inline int open_file_readonly(const char *fn)
+static inline dubtree_handle_t open_file_readonly(const char *fn)
 {
     int f = open(fn, O_RDONLY | O_NOATIME);
-    return f < 0 ? DUBTREE_INVALID_HANDLE : f;
+    dubtree_handle_t r = {f};
+    return r;
 }
 
-static inline void close_file(int f)
+static inline void close_file(dubtree_handle_t f)
 {
-    close(f);
+    close(f.fd);
 }
 #endif
 
@@ -999,7 +1001,7 @@ static int swap_init_map(BDRVSwapState *s, char *path, char *cow_backup)
 
     /* Map the binary-searchable index over shallow mapped files. */
     map_file = open_file_readonly(path);
-    if (map_file == DUBTREE_INVALID_HANDLE) {
+    if (invalid_handle(map_file)) {
         return -1;
     }
 
@@ -1548,14 +1550,14 @@ static int swap_fill_read_holes(BDRVSwapState *s, uint64_t offset, uint64_t coun
                             handle = open_file_readonly(cow);
                         }
 
-                        if (handle == DUBTREE_INVALID_HANDLE) {
+                        if (invalid_handle(handle)) {
                             /* When no CoW backup, use the normal shallow file name. */
                             handle = open_file_readonly(filename);
                         }
 #endif
 
                         /* No CoW file and no orig. shallow file. We're doomed. */
-                        if (handle == DUBTREE_INVALID_HANDLE) {
+                        if (invalid_handle(handle)) {
                             Wwarn("swap: failed to open shallow %s", filename);
                             goto next;
                         }

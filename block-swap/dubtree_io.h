@@ -2,8 +2,17 @@
 #define __DUBTREE_IO_H__
 
 #ifdef _WIN32
-#define DUBTREE_INVALID_HANDLE INVALID_HANDLE_VALUE
-typedef HANDLE dubtree_handle_t;
+typedef struct {
+    HANDLE h;
+} dubtree_handle_t;
+
+static inline int valid_handle(dubtree_handle_t f) {
+    return f.fd != INVALID_HANDLE_VALUE;
+}
+
+static inline int invalid_handle(dubtree_handle_t f) {
+    return f.h == INVALID_HANDLE_VALUE;
+}
 #else
 #include <unistd.h>
 #include <errno.h>
@@ -16,9 +25,20 @@ typedef HANDLE dubtree_handle_t;
 #endif
 
 
-#define DUBTREE_INVALID_HANDLE -1
-typedef int dubtree_handle_t;
+typedef struct {
+    int fd;
+} dubtree_handle_t;
+
+static inline int valid_handle(dubtree_handle_t f) {
+    return f.fd >= 0;
+}
+
+static inline int invalid_handle(dubtree_handle_t f) {
+    return f.fd < 0;
+}
 #endif
+
+extern const dubtree_handle_t DUBTREE_INVALID_HANDLE;
 
 /* Expand path using fullpath/realpath. Caller must
  * free returned result. */
@@ -40,7 +60,8 @@ dubtree_open_existing(const char *fn)
             OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
 #else
     int f = open(fn, O_RDWR | O_NOATIME);
-    return f < 0 ? DUBTREE_INVALID_HANDLE : f;
+    dubtree_handle_t r = {f};
+    return r;
 #endif
 }
 
@@ -74,7 +95,8 @@ dubtree_open_existing_readonly(const char *fn)
             NULL);
 #else
     int f = open(fn, O_RDONLY | O_NOATIME);
-    return f < 0 ? DUBTREE_INVALID_HANDLE : f;
+    dubtree_handle_t r = {f};
+    return r;
 #endif
 }
 
@@ -91,7 +113,8 @@ dubtree_open_new(const char *fn, int temp)
             OPEN_ALWAYS, flags, NULL);
 #else
     int f = open(fn, O_RDWR | O_CREAT | O_EXCL | O_NOATIME, 0644);
-    return f < 0 ? DUBTREE_INVALID_HANDLE : f;
+    dubtree_handle_t r = {f};
+    return r;
 #endif
 }
 
@@ -101,7 +124,7 @@ static inline void dubtree_set_file_size(dubtree_handle_t f, size_t sz)
     SetFilePointer(f, (DWORD)sz, 0, FILE_BEGIN);
     SetEndOfFile(f);
 #else
-    if (ftruncate(f, sz)) {
+    if (ftruncate(f.fd, sz)) {
         perror("truncate");
         exit(-1);
     }
@@ -114,7 +137,7 @@ static inline int64_t dubtree_get_file_size(dubtree_handle_t f)
     return GetFileSize(f, NULL); // XXX on 32b
 #else
     struct stat st;
-    if (fstat(f, &st) < 0) {
+    if (fstat(f.fd, &st) < 0) {
         //warn("unable to stat %s", s->filename);
         assert(0);
         return -1;
@@ -128,7 +151,7 @@ static inline void dubtree_close_file(dubtree_handle_t f)
 #ifdef _WIN32
     CloseHandle(f);
 #else
-    close(f);
+    close(f.fd);
 #endif
 }
 
@@ -157,7 +180,7 @@ int dubtree_pread(dubtree_handle_t f, void *buf, size_t sz, uint64_t offset)
 #else
     int r;
     do {
-        r = pread(f, buf, sz, offset);
+        r = pread(f.fd, buf, sz, offset);
     } while (r < 0 && errno == EINTR);
     return r;
 #endif
@@ -188,7 +211,7 @@ dubtree_pwrite(dubtree_handle_t f, const void *buf, size_t sz, uint64_t offset)
 #else
     int r;
     do {
-        r = pwrite(f, buf, sz, offset);
+        r = pwrite(f.fd, buf, sz, offset);
     } while (r < 0 && errno == EINTR);
     return (r == sz) ? r : -1;
 #endif

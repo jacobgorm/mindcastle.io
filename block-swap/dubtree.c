@@ -25,7 +25,11 @@
 #include <sys/uio.h>
 #include <limits.h>
 #include <fcntl.h>
+const dubtree_handle_t DUBTREE_INVALID_HANDLE = {-1};
+#else
+const dubtree_handle_t DUBTREE_INVALID_HANDLE = {INVALID_HANDLE_VALUE};
 #endif
+
 
 void dubtree_close(DubTree *t)
 {
@@ -98,9 +102,9 @@ int dubtree_init(DubTree *t, char **fallbacks,
     void *m;
     asprintf(&mn, "%s/"DUBTREE_MMAPPED_NAME, fn);
     dubtree_handle_t f = dubtree_open_existing(mn);
-    if (f == DUBTREE_INVALID_HANDLE) {
+    if (invalid_handle(f)) {
         f = dubtree_open_new(mn, 0);
-        if (f == DUBTREE_INVALID_HANDLE) {
+        if (invalid_handle(f)) {
             printf("unable to open %s: %s\n", mn, strerror(errno));
             return -1;
         }
@@ -122,8 +126,8 @@ int dubtree_init(DubTree *t, char **fallbacks,
     }
 #else
     m = mmap(NULL, sizeof(DubTreeHeader), PROT_READ | PROT_WRITE,
-                          MAP_SHARED, f, 0);
-    close(f);
+                          MAP_SHARED, f.fd, 0);
+    close(f.fd);
     if (m == MAP_FAILED) {
         warn("unable to map name=%s\n", mn);
         return -1;
@@ -138,7 +142,7 @@ int dubtree_init(DubTree *t, char **fallbacks,
 
         char **fb = t->fallbacks + 1;
         f = DUBTREE_INVALID_HANDLE;
-        while (f == DUBTREE_INVALID_HANDLE && *fb) {
+        while (invalid_handle(f) && *fb) {
             asprintf(&fn, "%s/%s", *fb++, DUBTREE_MMAPPED_NAME);
             assert(fn);
             printf("attempt to open fallback %s\n", fn);
@@ -146,7 +150,7 @@ int dubtree_init(DubTree *t, char **fallbacks,
             free(fn);
         }
 
-        if (f != DUBTREE_INVALID_HANDLE) {
+        if (valid_handle(f)) {
             dubtree_pread(f, t->header, sizeof(*(t->header)), 0);
             dubtree_close_file(f);
         }
@@ -414,10 +418,10 @@ static int execute_reads(DubTree *t,
             v[j].iov_len = rd->size;
         }
         do {
-            r = preadv(f, v, take, offset);
+            r = preadv(f.fd, v, take, offset);
         } while (r < 0 && errno == EINTR);
         if (r < 0) {
-            err(1, "preadv failed f=%d r %d", f, r);
+            err(1, "preadv failed f=%d r %d", f.fd, r);
         }
     }
 #endif
@@ -485,7 +489,7 @@ static int flush_reads(DubTree *t, Chunk *c, const uint8_t *chunk0, CallbackStat
             int l;
 
             f = get_chunk(t, cr->chunk_id, 0, &l);
-            if (f != DUBTREE_INVALID_HANDLE) {
+            if (valid_handle(f)) {
                 r = flush_chunk(t, c->buf, f, cr, cs);
                 put_chunk(t, l);
             } else {
@@ -522,7 +526,7 @@ static inline void *map_tree(dubtree_handle_t f)
     assert(m);
     CloseHandle(h);
 #else
-    m = mmap(NULL, sz, PROT_READ, MAP_PRIVATE, f, 0);
+    m = mmap(NULL, sz, PROT_READ, MAP_PRIVATE, f.fd, 0);
     if (m == MAP_FAILED) {
         err(1, "unable to map\n");
     }
@@ -591,7 +595,7 @@ static int populate_cbf(DubTree *t, int n)
             dubtree_handle_t f;
             const UserData *cud;
             f = get_chunk(t, t->levels[i], 0, &lines[i]);
-            if (f == DUBTREE_INVALID_HANDLE) {
+            if (invalid_handle(f)) {
                 return -1;
             }
             simpletree_open(&trees[i], map_tree(f));
@@ -744,7 +748,7 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
             if (!cmp_chunk_ids(&ct->chunk, &t->levels[i])) {
                 unmap_tree(ct->st.mem, simpletree_get_nodes_size(&ct->st));
                 clear_chunk_id(&ct->chunk);
-                if (ct->f != DUBTREE_INVALID_HANDLE) {
+                if (valid_handle(ct->f)) {
                     __put_chunk(t, ct->line);
                     ct->f = DUBTREE_INVALID_HANDLE;
                 }
@@ -755,7 +759,6 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
         if (!valid_chunk_id(&ct->chunk) && valid_chunk_id(&t->levels[i])) {
             ct->chunk = t->levels[i];
             ct->f = __get_chunk(t, ct->chunk, 0, &ct->line);
-            assert (ct->f != DUBTREE_INVALID_HANDLE);
             simpletree_open(&ct->st, map_tree(ct->f));
         }
     }
@@ -963,11 +966,11 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
     if (hashtable_find(&t->ht, chunk_id.id.first64, &line)) {
         cl = lru_cache_touch_line(&t->lru, line);
         ++(cl->users);
-        f = (dubtree_handle_t) cl->value;
+        f.fd = (int) cl->value; // XXX
     } else {
         char *fn = NULL;
         char **fb = t->fallbacks;
-        while (f == DUBTREE_INVALID_HANDLE && *fb) {
+        while (invalid_handle(f) && *fb) {
             free(fn);
             fn = name_chunk(*fb, chunk_id);
             if (fb == t->fallbacks) {
@@ -980,7 +983,7 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
             ++fb;
         }
 
-        if (f != DUBTREE_INVALID_HANDLE) {
+        if (valid_handle(f)) {
             for (;;) {
                 line = lru_cache_evict_line(&t->lru);
                 cl = lru_cache_touch_line(&t->lru, line);
@@ -990,11 +993,12 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
             }
             if (cl->key) {
                 hashtable_delete(&t->ht, cl->key);
-                dubtree_close_file((dubtree_handle_t) cl->value);
+                dubtree_handle_t f = { (int) cl->value };
+                dubtree_close_file(f);
             }
 
             cl->key = chunk_id.id.first64;
-            cl->value = (uint64_t) (uintptr_t) f;
+            cl->value = f.fd;
             cl->users = 1;
             free(cl->opaque);
             cl->opaque = malloc(sizeof(chunk_id));
@@ -1010,7 +1014,7 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
         free(fn);
     }
 
-    if (f != DUBTREE_INVALID_HANDLE) {
+    if (valid_handle(f)) {
         *l = line;
     }
     return f;
@@ -1029,7 +1033,7 @@ static int unlink_chunk(DubTree *t, chunk_id_t chunk_id, dubtree_handle_t f)
 {
     char *fn;
 
-    if (f != DUBTREE_INVALID_HANDLE) {
+    if (valid_handle(f)) {
 #ifdef _WIN32
         FILE_DISPOSITION_INFO fdi = {1};
         if (!SetFileInformationByHandle(f, FileDispositionInfo, &fdi,
@@ -1067,7 +1071,7 @@ static inline void __put_chunk(DubTree *t, int line)
             chunk_id_t *pid = cl->opaque;
             chunk_id = *pid;
             free(pid);
-            f = (dubtree_handle_t) cl->value;
+            f.fd = (int) cl->value;
             hashtable_delete(&t->ht, cl->key);
             delete = 1;
             memset(cl, 0, sizeof(*cl));
@@ -1098,7 +1102,7 @@ static inline void __free_chunk(DubTree *t, chunk_id_t chunk_id)
             cl->delete = 1;
             delete = 0;
         } else {
-            f = (dubtree_handle_t) cl->value;
+            f.fd = (int) cl->value;
             hashtable_delete(&t->ht, cl->key);
             cl->key = 0;
             cl->value = 0;
@@ -1161,7 +1165,7 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
 #else
     strong_hash(chunk_id.id.full, DUBTREE_HASH_SIZE, c->buf, size);
     dubtree_handle_t f = get_chunk(t, chunk_id, 1, &l);
-    if (f == DUBTREE_INVALID_HANDLE) {
+    if (invalid_handle(f)) {
         if (errno == EEXIST) {
             printf("not writing pre-existing chunk %"PRIx64"\n", chunk_id.id.first64);
         } else {
@@ -1250,7 +1254,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
             existing = &trees[i];
 
             f = get_chunk(t, t->levels[i], 0, &tree_lines[i]);
-            if (f == DUBTREE_INVALID_HANDLE) {
+            if (invalid_handle(f)) {
 #ifdef _WIN32
                 Werr(1, "get_chunk failed");
 #else
@@ -1507,7 +1511,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
     strong_hash(tree_chunk.id.full, DUBTREE_HASH_SIZE, st.mem, simpletree_get_nodes_size(&st));
     int l;
     dubtree_handle_t f = get_chunk(t, tree_chunk, 1, &l);
-    if (f == DUBTREE_INVALID_HANDLE) {
+    if (invalid_handle(f)) {
         err(1, "unable to open tree chunk %"PRIx64" for write", tree_chunk.id.first64);
         return -1;
     }
@@ -1577,7 +1581,7 @@ int dubtree_delete(DubTree *t)
             const UserData *cud;
 
             f = get_chunk(t, chunk_id, 0, &line);
-            if (f == DUBTREE_INVALID_HANDLE) {
+            if (invalid_handle(f)) {
                 warn("unable to delete tree-chunk=%"PRIx64, chunk_id.id.first64);
                 return -1;
             }
@@ -1630,7 +1634,7 @@ int dubtree_sanity_check(DubTree *t)
 
             printf("get level %d\n", i);
             f = get_chunk(t, t->levels[i], 0, &line);
-            if (f == DUBTREE_INVALID_HANDLE) {
+            if (invalid_handle(f)) {
                 return -1;
             }
             simpletree_open(&st, map_tree(f));
@@ -1653,7 +1657,7 @@ int dubtree_sanity_check(DubTree *t)
                     chunk_id = get_chunk_id(cud, k.value.chunk);
                 }
                 cf = get_chunk(t, chunk_id, 0, &l);
-                if (cf == DUBTREE_INVALID_HANDLE) {
+                if (invalid_handle(cf)) {
                     warn("unable to read chunk %"PRIx64, chunk_id.id.first64);
                     return -1;
                 }
