@@ -462,7 +462,7 @@ static int flush_chunk(DubTree *t, uint8_t *dst, dubtree_handle_t f,
     return r;
 }
 
-int flush_reads(DubTree *t, Chunk *c, const uint8_t *chunk0, CallbackState *cs)
+static int flush_reads(DubTree *t, Chunk *c, const uint8_t *chunk0, CallbackState *cs)
 {
     int i, j;
     int r = 0;
