@@ -68,25 +68,6 @@ dubtree_open_existing(const char *fn)
 static inline dubtree_handle_t
 dubtree_open_existing_readonly(const char *fn)
 {
-    char tmp[256];
-    if (!memcmp("http://", fn, 7) || !memcmp("https://", fn, 8)) {
-
-        const char *end = fn + strlen(fn);
-        while (*end != '/') {
-            --end;
-        }
-        ++end;
-
-        sprintf(tmp, "/home/jacob/dev/oneroot/cache/%s", end);
-        char *cmd;
-        asprintf(&cmd, "/usr/bin/wget -O %s %s", tmp, fn);
-        FILE *p = popen(cmd, "r");
-        assert(p);
-        free(cmd);
-        fn = tmp;
-        printf("redirect to %s\n", fn);
-        fclose(p);
-    }
 #ifdef _WIN32
     return CreateFile(fn, GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,

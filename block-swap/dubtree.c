@@ -1,4 +1,3 @@
-
 #include "dubtree_sys.h"
 #include "dubtree_io.h"
 
@@ -9,6 +8,10 @@
 #include "lz4.h"
 #include "hex.h"
 #include "stronghash.h"
+
+/* These must go last or they will mess with e.g. asprintf() */
+#include <curl/curl.h>
+#include <curl/easy.h>
 
 #define DUBTREE_FILE_MAGIC_MMAP 0x73776170
 
@@ -967,6 +970,35 @@ static inline char *name_chunk(const char *prefix, chunk_id_t chunk_id)
     return fn;
 }
 
+typedef struct {
+    dubtree_handle_t f;
+    uint32_t offset;
+} HttpGetState;
+
+static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
+{
+    HttpGetState *hgs = opaque;
+    dubtree_pwrite(hgs->f, ptr, size * nmemb, hgs->offset);
+    hgs->offset += size * nmemb;
+    return size * nmemb;
+}
+
+
+int curl_sockopt_cb(void *clientp, curl_socket_t curlfd, curlsocktype purpose)
+{
+    int size;
+    int r;
+    for (size = 1 << 24; size != 0; size >>= 1) {
+        r = setsockopt(curlfd, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size));
+        if (r == 0) {
+            printf("%d ok\n", size);
+            break;
+        }
+    }
+    assert(r == 0);
+    return r;
+}
+
 static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int dirty, int *l)
 {
     dubtree_handle_t f = DUBTREE_INVALID_HANDLE;
@@ -990,6 +1022,31 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
                     dubtree_open_new(fn, 0) :
                     dubtree_open_existing(fn);
             } else {
+                if (!memcmp("http://", fn, 7) || !memcmp("https://", fn, 8)) {
+                    const char *end = fn + strlen(fn);
+                    while (*end != '/') {
+                        --end;
+                    }
+                    ++end;
+                    char *tmp;
+                    asprintf(&tmp, "/home/jacob/dev/oneroot/cache/%s", end);
+                    printf("redirect to %s\n", tmp);
+
+                    dubtree_handle_t redir = dubtree_open_new(tmp, 0);
+                    HttpGetState hgs = {redir};
+                    static CURL *ch = NULL;
+                    if (!ch) {
+                        ch = curl_easy_init();
+                    }
+                    curl_easy_setopt(ch, CURLOPT_URL, fn);
+                    curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, curl_data_cb);
+                    curl_easy_setopt(ch, CURLOPT_WRITEDATA, &hgs);
+                    curl_easy_setopt(ch, CURLOPT_SOCKOPTFUNCTION, curl_sockopt_cb);
+                    curl_easy_perform(ch);
+                    //curl_easy_cleanup(ch);
+                    dubtree_close_file(redir);
+                    fn = tmp;
+                }
                 f = dubtree_open_existing_readonly(fn);
             }
             ++fb;
