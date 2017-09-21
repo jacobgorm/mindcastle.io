@@ -1228,7 +1228,6 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
     SimpleTree *existing;
     const UserData *cud;
     const UserData *old_ud;
-    int tree_lines[DUBTREE_MAX_LEVELS];
 
     uint64_t slot_size = DUBTREE_SLOT_SIZE;
 
@@ -1552,7 +1551,6 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
             }
 
             unmap_tree(st->mem, simpletree_get_nodes_size(st));
-            __put_chunk(t, tree_lines[j]);
             __free_chunk(t, chunk_id);
         }
     }
