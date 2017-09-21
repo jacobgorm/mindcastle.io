@@ -36,7 +36,11 @@ void dubtree_close(DubTree *t)
     char **fb;
 
     hashtable_clear(&t->ht);
-    lruCacheClose(&t->lru);
+    for (int i = 0; i < (1 << t->lru.log_lines); ++i) {
+        LruCacheLine *cl = lru_cache_get_line(&t->lru, i);
+        free((void *) cl->value);
+    }
+    lru_cache_close(&t->lru);
 
     free(t->buffered);
 
@@ -60,6 +64,11 @@ void dubtree_close(DubTree *t)
 
 static int populate_cbf(DubTree *t, int n);
 
+typedef struct {
+    dubtree_handle_t f;
+    chunk_id_t chunk_id;
+} CacheLineUserData;
+
 int dubtree_init(DubTree *t, char **fallbacks,
         malloc_callback malloc_cb, free_callback free_cb,
         void *opaque)
@@ -82,7 +91,13 @@ int dubtree_init(DubTree *t, char **fallbacks,
 
     critical_section_enter(&t->cache_lock);
     hashtable_init(&t->ht, NULL, NULL);
-    lru_cache_init(&t->lru, 9);
+    const int log_cache_lines = 9;
+    lru_cache_init(&t->lru, log_cache_lines);
+    for (int i = 0; i < (1 << log_cache_lines); ++i) {
+        CacheLineUserData *ud = calloc(1, sizeof(CacheLineUserData));
+        LruCacheLine *cl = lru_cache_get_line(&t->lru, i);
+        cl->value = (uintptr_t) ud;
+    }
     critical_section_leave(&t->cache_lock);
 
     fb = t->fallbacks;
@@ -540,6 +555,7 @@ static void *__map_chunk(DubTree *t, chunk_id_t chunk_id)
     int line = -1;
     dubtree_handle_t f = __get_chunk(t, chunk_id, 0, &line);
     if (invalid_handle(f)) {
+        assert(0);
         return NULL;
     }
     void *r = map_tree(f);
@@ -940,11 +956,6 @@ static inline void sift_down(DubTree *t, HeapElem **hp, size_t end)
 
 #define io_sz (1<<23)
 
-typedef struct {
-    dubtree_handle_t f;
-    chunk_id_t chunk_id;
-} CacheLineUserData;
-
 static inline char *name_chunk(const char *prefix, chunk_id_t chunk_id)
 {
     char *fn;
@@ -965,7 +976,7 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
     if (hashtable_find(&t->ht, chunk_id.id.first64, &line)) {
         cl = lru_cache_touch_line(&t->lru, line);
         ++(cl->users);
-        CacheLineUserData *ud = cl->opaque;
+        CacheLineUserData *ud = (CacheLineUserData *) cl->value;
         f = ud->f;
         *l = line; // XXX
     } else {
@@ -992,20 +1003,17 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
                     break;
                 }
             }
+            CacheLineUserData *ud = (CacheLineUserData *) cl->value;
+            assert(ud);
             if (cl->key) {
                 hashtable_delete(&t->ht, cl->key);
-                CacheLineUserData *ud = cl->opaque;
                 dubtree_close_file(ud->f);
-                free(ud);
-                cl->opaque = NULL;
+                clear_chunk_id(&ud->chunk_id);
+                ud->f = DUBTREE_INVALID_HANDLE;
             }
 
             cl->key = chunk_id.id.first64;
-            cl->value = f.fd;
             cl->users = 1;
-            free(cl->opaque);
-            cl->opaque = malloc(sizeof(CacheLineUserData));
-            CacheLineUserData *ud = cl->opaque;
             ud->chunk_id = chunk_id;
             ud->f = f;
             hashtable_insert(&t->ht, chunk_id.id.first64, line);
@@ -1066,16 +1074,16 @@ static int unlink_chunk(DubTree *t, chunk_id_t chunk_id, dubtree_handle_t f)
 static inline void __put_chunk(DubTree *t, int line)
 {
     LruCacheLine *cl = &t->lru.lines[line];
+    assert(cl->users > 0);
     chunk_id_t chunk_id = {};
     int delete = 0;
     dubtree_handle_t f = DUBTREE_INVALID_HANDLE;
 
     if (cl->users-- == 1) {
         if (cl->delete) {
-            CacheLineUserData *ud = cl->opaque;
+            CacheLineUserData *ud = (CacheLineUserData *) cl->value;
             chunk_id = ud->chunk_id;
             f = ud->f;
-            free(ud);
             hashtable_delete(&t->ht, cl->key);
             delete = 1;
             memset(cl, 0, sizeof(*cl));
@@ -1106,12 +1114,10 @@ static inline void __free_chunk(DubTree *t, chunk_id_t chunk_id)
             cl->delete = 1;
             delete = 0;
         } else {
-            CacheLineUserData *ud = cl->opaque;
+            CacheLineUserData *ud = (CacheLineUserData *) cl->value;
             f = ud->f;
-            free(ud);
             hashtable_delete(&t->ht, cl->key);
             cl->key = 0;
-            cl->value = 0;
         }
     }
 

@@ -7,7 +7,6 @@ typedef struct LruCacheLine {
     int users;
     int delete;
     int dirty;
-    void *opaque;
 } LruCacheLine;
 
 typedef struct LruCache {
@@ -36,7 +35,7 @@ static inline int lru_cache_init(LruCache *fc, int log_lines)
     return 0;
 }
 
-static inline void lruCacheClose(LruCache *fc)
+static inline void lru_cache_close(LruCache *fc)
 {
     int i;
     for (i = 0; i < (1<<fc->log_lines); ++i) {
@@ -44,7 +43,6 @@ static inline void lruCacheClose(LruCache *fc)
         if (cl->users) {
             printf("leaked cache line %d\n", i);
         }
-        free(cl->opaque);
     }
     free(fc->bits);
     free(fc->lines);
@@ -67,6 +65,12 @@ int lru_cache_evict_line(LruCache *fc)
         fc->bits[parent] ^= 1;
     }
     return child - lru_cache_innner_nodes(fc);
+}
+
+static inline
+LruCacheLine *lru_cache_get_line(LruCache *fc, int line)
+{
+    return &fc->lines[line];
 }
 
 static inline

@@ -2500,9 +2500,9 @@ void swap_close(BlockDriverState *bs)
             swap_unmap_file(mf);
         }
     }
-    lruCacheClose(&s->bc);
+    lru_cache_close(&s->bc);
     hashtable_clear(&s->cached_blocks);
-    lruCacheClose(&s->fc);
+    lru_cache_close(&s->fc);
     hashtable_clear(&s->open_files);
 }
 
