@@ -127,6 +127,14 @@ static int swap_backend_active = 0;
   #define SWAP_LOG_BLOCK_CACHE_LINES 8
 #endif
 
+#ifdef _WIN32
+typedef HANDLE swap_handle_t;
+#define SWAP_INVALID_HANDLE INVALID_HANDLE_VALUE
+#else
+typedef int swap_handle_t;
+#define SWAP_INVALID_HANDLE -1
+#endif
+
 typedef struct SwapMapTuple {
     uint32_t end;
     uint32_t size;
@@ -322,7 +330,7 @@ typedef struct BDRVSwapState {
 
 #ifdef _WIN32
     HANDLE heap;
-    dubtree_handle_t volume; /* Volume for opening by id. */
+    swap_handle_t volume; /* Volume for opening by id. */
     LARGE_INTEGER map_file_creation_time; /* map.idx creation timestamp. */
 #endif
 
@@ -860,7 +868,7 @@ static int swap_read_header(BDRVSwapState *s)
  * length > actual file length (likely for shallow maps, as these are 4kIB
  * block aligned), we map as much as we have. */
 #ifdef _WIN32
-int swap_map_file(HANDLE file,
+int swap_map_file(swap_handle_t file,
         uint64_t offset, uint64_t length,
         SwapMappedFile *mf)
 {
@@ -912,7 +920,7 @@ void swap_unmap_file(SwapMappedFile *mf)
     UnmapViewOfFile(mf->mapping);
 }
 
-static inline HANDLE open_file_readonly(const char *fn)
+static inline swap_handle_t open_file_readonly(const char *fn)
 {
     return CreateFile(fn, GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
@@ -926,12 +934,11 @@ static inline void close_file(HANDLE f)
 
 #else
 /* See comment for win32 version above. */
-int swap_map_file(dubtree_handle_t f,
+int swap_map_file(swap_handle_t file,
         uint64_t offset,
         uint64_t length,
         SwapMappedFile *mf)
 {
-    int file = f.fd;
     struct stat st;
     static uint64_t granularity = 0;
 
@@ -966,23 +973,21 @@ void swap_unmap_file(SwapMappedFile *mf)
     munmap(mf->mapping, mf->size);
 }
 
-static inline dubtree_handle_t open_file_readonly(const char *fn)
+static inline swap_handle_t open_file_readonly(const char *fn)
 {
-    int f = open(fn, O_RDONLY | O_NOATIME);
-    dubtree_handle_t r = {f};
-    return r;
+    return open(fn, O_RDONLY | O_NOATIME);
 }
 
-static inline void close_file(dubtree_handle_t f)
+static inline void close_file(int f)
 {
-    close(f.fd);
+    close(f);
 }
 #endif
 
 static int swap_init_map(BDRVSwapState *s, char *path, char *cow_backup)
 {
     uint32_t *idx;
-    dubtree_handle_t map_file;
+    swap_handle_t map_file;
 
 #if 0
     /* Is there a 'cow' dir under swapdata? */
@@ -1001,7 +1006,7 @@ static int swap_init_map(BDRVSwapState *s, char *path, char *cow_backup)
 
     /* Map the binary-searchable index over shallow mapped files. */
     map_file = open_file_readonly(path);
-    if (invalid_handle(map_file)) {
+    if (map_file == SWAP_INVALID_HANDLE) {
         return -1;
     }
 
@@ -1326,7 +1331,7 @@ static inline const SwapMapTuple *swap_resolve_mapped_file(
 }
 
 #ifdef _WIN32
-static dubtree_handle_t
+static swap_handle_t
 swap_open_file_by_id(HANDLE volume, uint64_t file_id)
 {
     static pNtCreateFile NtCreateFile = NULL;
@@ -1363,7 +1368,7 @@ swap_open_file_by_id(HANDLE volume, uint64_t file_id)
     if (rc) {
         debug_printf("rc %x for file_id %"PRIx64"\n",
             (uint32_t) rc, (uint64_t) file_id);
-        h = DUBTREE_INVALID_HANDLE;
+        h = SWAP_INVALID_HANDLE;
     }
     return h;
 }
@@ -1383,6 +1388,38 @@ initcall(swap_early_init)
 #endif /* !defined(LIBIMG) */
 
 #endif
+
+static inline
+int swap_pread(swap_handle_t f, void *buf, size_t sz, uint64_t offset)
+{
+#ifdef _WIN32
+    OVERLAPPED o = {};
+    DWORD got = 0;
+    o.OffsetHigh = offset >>32ULL;
+    o.Offset = offset & 0xffffffff;
+
+    if (!ReadFile(f, buf, (DWORD)sz, NULL, &o)) {
+        if (GetLastError() != ERROR_IO_PENDING) {
+            printf("%s: ReadFile fails with error %u\n",
+                    __FUNCTION__, (uint32_t)GetLastError());
+            return -1;
+        }
+    }
+    if (!GetOverlappedResult(f, &o, &got, TRUE)) {
+        printf("GetOverlappedResult fails on line %d with error %u\n",
+                __LINE__, (uint32_t)GetLastError());
+        got = -1;
+    }
+    return (int) got;
+#else
+    int r;
+    do {
+        r = pread(f, buf, sz, offset);
+    } while (r < 0 && errno == EINTR);
+    return r;
+#endif
+}
+
 
 /* Fill in blocks that are missing after dubtree_find() call, by looking for
  * shallow files that would fit in the 'holes' in our read result.
@@ -1441,7 +1478,7 @@ static int swap_fill_read_holes(BDRVSwapState *s, uint64_t offset, uint64_t coun
                     uint64_t line;
                     SwapMappedFile *evicted = NULL;
                     SwapMappedFile *file = NULL;
-                    dubtree_handle_t handle = DUBTREE_INVALID_HANDLE;
+                    swap_handle_t handle = SWAP_INVALID_HANDLE;
                     uint64_t map_offset;
                     uint64_t tuple_start = tuple->end - tuple->size;
                     uint64_t blocks_available = tuple->size - (block - tuple_start);
@@ -1468,7 +1505,7 @@ static int swap_fill_read_holes(BDRVSwapState *s, uint64_t offset, uint64_t coun
                         /* Completely seperate the file open logic of WIN32 from OSX. This helps
                            quite a bit with readability. */
 #ifdef _WIN32
-                        dubtree_handle_t tmp_handle = DUBTREE_INVALID_HANDLE;
+                        swap_handle_t tmp_handle = SWAP_INVALID_HANDLE;
                         /* In the case of WIN32, open the original file and compare its timestamp
                            with the timestamp of map.idx. If the creation-time of the file is newer,
                            use the copy from the cow directory. Since CoWed files are expected to
@@ -1485,7 +1522,7 @@ static int swap_fill_read_holes(BDRVSwapState *s, uint64_t offset, uint64_t coun
 
                         handle = swap_open_file_by_id(s->volume, file_id.QuadPart);
 
-                        if (handle != DUBTREE_INVALID_HANDLE) {
+                        if (handle != SWAP_INVALID_HANDLE) {
                             /* Check that the file was modified before the template was created. */
                             LARGE_INTEGER file_modification_time;
                             if (!GetFileTime(handle, NULL, NULL, (LPFILETIME)&file_modification_time)) {
@@ -1497,42 +1534,42 @@ static int swap_fill_read_holes(BDRVSwapState *s, uint64_t offset, uint64_t coun
                                    Hence cache this handle and go ahead and open from cow directory.
                                    Note that a difference in timezones could also cause this symptom. */
                                 tmp_handle = handle;
-                                handle = DUBTREE_INVALID_HANDLE;
+                                handle = SWAP_INVALID_HANDLE;
                             }
                         }
 
                         /* Check if a CoW backup is needed and exists. */
-                        if (handle == DUBTREE_INVALID_HANDLE && s->cow_backup) {
+                        if (handle == SWAP_INVALID_HANDLE && s->cow_backup) {
                             /* 16 bytes for name, ".copy" is 5, '/' is 1, '\0' is 1 */
                             char cow[strlen(s->cow_backup) + 24];
                             sprintf(cow, "%s/%08X%08X.copy", s->cow_backup,
                                         tuple->file_id_highpart, tuple->file_id_lowpart);
 
                             handle = open_file_readonly(cow);
-                            if (handle != DUBTREE_INVALID_HANDLE) {
+                            if (handle != SWAP_INVALID_HANDLE) {
                                 debug_printf("swap: open [%s] backed up by cow file [%s]\n", filename, cow);
                             }
                         }
 
-                        if (handle == DUBTREE_INVALID_HANDLE) {
+                        if (handle == SWAP_INVALID_HANDLE) {
                             /* Ultimately try opening the file from the path or cached file-id.
                                Note that it may just be due to timezone issues that the
                                file has a newer time-stamp and has not been CoWed. */
                             debug_printf("swap: unable to open shallow %s"
                                   " from cow; opening using file-id or path.\n",
                                   filename);
-                            if (tmp_handle != DUBTREE_INVALID_HANDLE) {
+                            if (tmp_handle != SWAP_INVALID_HANDLE) {
                                 /* small optimization: use the open from file-id*/
                                 handle = tmp_handle;
-                                tmp_handle = DUBTREE_INVALID_HANDLE;
+                                tmp_handle = SWAP_INVALID_HANDLE;
                             } else {
                                 handle = open_file_readonly(filename);
                             }
                         }
 
-                        if (tmp_handle != DUBTREE_INVALID_HANDLE) {
+                        if (tmp_handle != SWAP_INVALID_HANDLE) {
                             close_file(tmp_handle);
-                            tmp_handle = DUBTREE_INVALID_HANDLE;
+                            tmp_handle = SWAP_INVALID_HANDLE;
                         }
 
 #else
@@ -1550,14 +1587,14 @@ static int swap_fill_read_holes(BDRVSwapState *s, uint64_t offset, uint64_t coun
                             handle = open_file_readonly(cow);
                         }
 
-                        if (invalid_handle(handle)) {
+                        if (handle == SWAP_INVALID_HANDLE) {
                             /* When no CoW backup, use the normal shallow file name. */
                             handle = open_file_readonly(filename);
                         }
 #endif
 
                         /* No CoW file and no orig. shallow file. We're doomed. */
-                        if (invalid_handle(handle)) {
+                        if (handle == SWAP_INVALID_HANDLE) {
                             Wwarn("swap: failed to open shallow %s", filename);
                             goto next;
                         }
@@ -1566,7 +1603,7 @@ static int swap_fill_read_holes(BDRVSwapState *s, uint64_t offset, uint64_t coun
                          * then we will perform the read now and continue to the
                          * next block without caching anything. */
                         if (SWAP_SECTOR_SIZE * tuple->size <= take) {
-                            if (dubtree_pread(handle, buffer + readOffset, take,
+                            if (swap_pread(handle, buffer + readOffset, take,
                                         SWAP_SECTOR_SIZE *
                                         ((block - tuple_start) +
                                         tuple->file_offset)) < 0) {
