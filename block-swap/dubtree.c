@@ -31,6 +31,7 @@
 #else
 #endif
 
+extern CURLM *cmh;
 
 void dubtree_close(DubTree *t)
 {
@@ -210,9 +211,9 @@ dubtree_quiesce(DubTree *t)
 static void __put_chunk(DubTree *t, int line);
 static void put_chunk(DubTree *t, int line);
 static dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id,
-                                       int dirty, int *l);
+                                       int dirty, int local, int *l);
 static dubtree_handle_t get_chunk(DubTree *t, chunk_id_t chunk_id,
-                                     int dirty, int *l);
+                                     int dirty, int local, int *l);
 
 typedef struct Read {
     int src_offset;
@@ -345,6 +346,20 @@ static void CALLBACK read_complete_scatter(DWORD rc, DWORD got, OVERLAPPED *o)
 }
 #endif
 
+typedef struct {
+    CURL *ch;
+    chunk_id_t chunk_id;
+    dubtree_handle_t f;
+    uint32_t offset;
+    CallbackState *cs;
+    uint8_t *buffer; // XXX mmap this
+    int num_blocked;
+    struct {
+        uint8_t *dst;
+        Read *first;
+        int n; } blocked_reads[256];
+} HttpGetState;
+
 static int execute_reads(DubTree *t,
         uint8_t *dst,
         dubtree_handle_t f,
@@ -353,6 +368,27 @@ static int execute_reads(DubTree *t,
 {
     int i;
     Read *rd;
+
+    HttpGetState *hgs = f->opaque;
+    if (hgs) {
+        uint32_t end = first[n - 1].src_offset + first[n - 1].size;
+        if (end > hgs->offset) {
+            printf("block reads @ %x\n", end);
+            increment_counter(cs);
+            hgs->cs = cs;
+            assert(hgs->num_blocked < 256); //XXX
+            hgs->blocked_reads[hgs->num_blocked].dst = dst;
+            hgs->blocked_reads[hgs->num_blocked].first = first;
+            hgs->blocked_reads[hgs->num_blocked].n = n;
+            ++(hgs->num_blocked);
+            return 0;
+        } else {
+            Read *rd = first;
+            for (int j = 0; j < n; ++j, ++rd) {
+                memcpy(dst + rd->dst_offset, hgs->buffer + rd->src_offset, rd->size);
+            }
+        }
+    }
 
 #ifdef _WIN32
     uint32_t size;
@@ -494,7 +530,7 @@ static int flush_reads(DubTree *t, Chunk *c, const uint8_t *chunk0, CallbackStat
             dubtree_handle_t f;
             int l;
 
-            f = get_chunk(t, cr->chunk_id, 0, &l);
+            f = get_chunk(t, cr->chunk_id, 0, 0, &l);
             if (valid_handle(f)) {
                 r = flush_chunk(t, c->buf, f, cr, cs);
                 put_chunk(t, l);
@@ -554,7 +590,7 @@ static inline void unmap_tree(void *mem, size_t size)
 static void *__map_chunk(DubTree *t, chunk_id_t chunk_id)
 {
     int line = -1;
-    dubtree_handle_t f = __get_chunk(t, chunk_id, 0, &line);
+    dubtree_handle_t f = __get_chunk(t, chunk_id, 0, 1, &line);
     if (invalid_handle(f)) {
         assert(0);
         return NULL;
@@ -964,23 +1000,48 @@ static inline char *name_chunk(const char *prefix, chunk_id_t chunk_id)
     char h[1 + len];
     hex(h, chunk_id.id.full, sizeof(chunk_id.id.full));
     h[len] = '\0';
-    asprintf(&fn, "%s/%s.lvl", prefix, h);
+    asprintf(&fn, "%s/%s-%x.lvl", prefix, h, chunk_id.size);
     return fn;
 }
 
-typedef struct {
-    dubtree_handle_t f;
-    uint32_t offset;
-} HttpGetState;
-
 static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
 {
+    //printf("%s\n", __FUNCTION__);
     HttpGetState *hgs = opaque;
     dubtree_pwrite(hgs->f, ptr, size * nmemb, hgs->offset);
     hgs->offset += size * nmemb;
     return size * nmemb;
 }
 
+static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
+{
+    HttpGetState *hgs = opaque;
+    memcpy(hgs->buffer + hgs->offset, ptr, size * nmemb);
+    hgs->offset += size * nmemb;
+    for (int i = 0; i < hgs->num_blocked; ++i) {
+        Read *first = hgs->blocked_reads[i].first;
+        if (first) {
+            int n = hgs->blocked_reads[i].n;
+            assert(n >= 1);
+            uint32_t end = first[n - 1].src_offset + first[n - 1].size;
+            if (hgs->offset >= end) {
+                Read *rd = first;
+                for (int j = 0; j < n; ++j, ++rd) {
+                    memcpy(hgs->blocked_reads[i].dst + rd->dst_offset, hgs->buffer + rd->src_offset, rd->size);
+                }
+                hgs->blocked_reads[i].first = NULL;
+                decrement_counter(hgs->cs);
+            }
+        }
+    }
+    if (hgs->offset == hgs->chunk_id.size) {
+        dubtree_pwrite(hgs->f, hgs->buffer, hgs->offset, 0);
+        free(hgs->buffer);
+        hgs->f->opaque = NULL;
+        free(hgs);
+    }
+    return size * nmemb;
+}
 
 int curl_sockopt_cb(void *clientp, curl_socket_t curlfd, curlsocktype purpose)
 {
@@ -989,7 +1050,6 @@ int curl_sockopt_cb(void *clientp, curl_socket_t curlfd, curlsocktype purpose)
     for (size = 1 << 24; size != 0; size >>= 1) {
         r = setsockopt(curlfd, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size));
         if (r == 0) {
-            printf("%d ok\n", size);
             break;
         }
     }
@@ -997,7 +1057,7 @@ int curl_sockopt_cb(void *clientp, curl_socket_t curlfd, curlsocktype purpose)
     return r;
 }
 
-static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int dirty, int *l)
+static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int dirty, int local, int *l)
 {
     dubtree_handle_t f = DUBTREE_INVALID_HANDLE;
     uint64_t line;
@@ -1028,24 +1088,39 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
                     ++end;
                     char *tmp;
                     asprintf(&tmp, "/home/jacob/dev/oneroot/cache/%s", end);
-                    printf("redirect to %s\n", tmp);
+                    //printf("redirect to %s\n", tmp);
 
                     dubtree_handle_t redir = dubtree_open_new(tmp, 0);
-                    HttpGetState hgs = {redir};
-                    static CURL *ch = NULL;
-                    if (!ch) {
-                        ch = curl_easy_init();
+                    HttpGetState *hgs = calloc(1, sizeof(*hgs));
+                    hgs->chunk_id = chunk_id;
+                    f = hgs->f = redir;
+                    static CURL *shared_ch = NULL;
+                    CURL *ch;
+                    if (local) {
+                        if (!shared_ch) {
+                            shared_ch = curl_easy_init();
+                        }
+                        ch = shared_ch;
+                    } else {
+                        ch = hgs->ch = curl_easy_init();
+                        f->opaque = hgs;
+                        hgs->buffer = calloc(1, chunk_id.size);
                     }
                     curl_easy_setopt(ch, CURLOPT_URL, fn);
-                    curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, curl_data_cb);
-                    curl_easy_setopt(ch, CURLOPT_WRITEDATA, &hgs);
+                    curl_easy_setopt(ch, CURLOPT_WRITEDATA, hgs);
                     curl_easy_setopt(ch, CURLOPT_SOCKOPTFUNCTION, curl_sockopt_cb);
-                    curl_easy_perform(ch);
-                    //curl_easy_cleanup(ch);
-                    dubtree_close_file(redir);
+                    if (local) {
+                        curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, curl_data_cb);
+                        curl_easy_perform(ch);
+                        free(hgs);
+                    } else {
+                        curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, curl_data_cb2);
+                        curl_multi_add_handle(cmh, ch);
+                    }
                     fn = tmp;
+                } else {
+                    f = dubtree_open_existing_readonly(fn);
                 }
-                f = dubtree_open_existing_readonly(fn);
             }
             ++fb;
         }
@@ -1087,11 +1162,11 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
     return f;
 }
 
-static dubtree_handle_t get_chunk(DubTree *t, chunk_id_t chunk_id, int dirty, int *l)
+static dubtree_handle_t get_chunk(DubTree *t, chunk_id_t chunk_id, int dirty, int local, int *l)
 {
     dubtree_handle_t f;
     critical_section_enter(&t->cache_lock);
-    f = __get_chunk(t, chunk_id, dirty, l);
+    f = __get_chunk(t, chunk_id, dirty, local, l);
     critical_section_leave(&t->cache_lock);
     return f;
 }
@@ -1232,7 +1307,7 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
 #else
     strong_hash(chunk_id.id.full, DUBTREE_HASH_SIZE, c->buf, size);
     chunk_id.size = size;
-    dubtree_handle_t f = get_chunk(t, chunk_id, 1, &l);
+    dubtree_handle_t f = get_chunk(t, chunk_id, 1, 0, &l);
     if (invalid_handle(f)) {
         if (errno == EEXIST) {
             printf("not writing pre-existing chunk %"PRIx64"\n", chunk_id.id.first64);
@@ -1701,7 +1776,7 @@ int dubtree_sanity_check(DubTree *t)
                     idx = k.value.chunk;
                     chunk_id = get_chunk_id(cud, k.value.chunk);
                 }
-                cf = get_chunk(t, chunk_id, 0, &l);
+                cf = get_chunk(t, chunk_id, 0, 0, &l);
                 if (invalid_handle(cf)) {
                     warn("unable to read chunk %"PRIx64, chunk_id.id.first64);
                     return -1;

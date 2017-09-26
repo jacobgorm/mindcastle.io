@@ -8,6 +8,12 @@
 
 #include "ioh.h"
 
+/* These must go last or they will mess with e.g. asprintf() */
+#include <curl/curl.h>
+#include <curl/easy.h>
+
+struct CURLM *cmh;
+
 typedef struct AioEntry {
     int fd;
     void (*cb) (void *opaque);
@@ -23,6 +29,8 @@ void aio_init(void)
         memset(e, 0, sizeof(*e));
         e->fd = -1;
     }
+    curl_global_init(CURL_GLOBAL_ALL);
+    cmh = curl_multi_init();
 }
 
 void aio_add_wait_object(int fd, void (*cb) (void *opaque), void *opaque) {
@@ -41,23 +49,63 @@ extern void dump_swapstat(void);
 
 int aio_wait(void)
 {
-    fd_set fds;
-    FD_ZERO(&fds);
-    int max = ioh_fd();
-    FD_SET(ioh_fd(), &fds);
+    int max = -1;
+    fd_set readset, writeset, errset;
+    FD_ZERO(&readset);
+    FD_ZERO(&writeset);
+    FD_ZERO(&errset);
+
+    CURLMcode mode;
+    int running;
+    int num_msgs;
+    do {
+        mode = curl_multi_perform(cmh, &running);
+    } while (mode == CURLM_CALL_MULTI_PERFORM);
+
+    do {
+        CURLMsg *msg = curl_multi_info_read(cmh, &num_msgs);
+        if (msg) {
+            int response;
+            curl_easy_getinfo(msg->easy_handle, CURLINFO_RESPONSE_CODE,
+                    &response);
+            if (response != 200) {
+                printf("got response %u\n", response);
+            }
+            curl_multi_remove_handle(cmh, msg->easy_handle);
+            curl_easy_cleanup(msg->easy_handle);
+        }
+    } while (num_msgs);
+
+    if (curl_multi_fdset(cmh, &readset, &writeset, &errset, &max) != CURLM_OK) {
+        printf("curl_multi_fdset failed!\n");
+    }
+
+    max = max > ioh_fd() ? max : ioh_fd();
+    FD_SET(ioh_fd(), &readset);
     for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
         AioEntry *e = &aios[i];
         int fd = e->fd;
         if (fd >= 0) {
             max = fd > max ? fd : max;
-            FD_SET(fd, &fds);
+            FD_SET(fd, &readset);
         }
     }
 
     struct timeval tv = {5, 0};
-    int r = select(max + 1, &fds, NULL, NULL, &tv);
+    long curl_timeout;
+    curl_multi_timeout(cmh, &curl_timeout);
+    if(curl_timeout >= 0) {
+        tv.tv_sec = curl_timeout / 1000;
+        if(tv.tv_sec > 1) {
+            tv.tv_sec = 1;
+        } else {
+            tv.tv_usec = (curl_timeout % 1000) * 1000;
+        }
+    }
+
+    int r = select(max + 1, &readset, &writeset, &errset, &tv);
     if (r > 0) {
-        if (FD_ISSET(ioh_fd(), &fds)) {
+        if (FD_ISSET(ioh_fd(), &readset)) {
             for (;;) {
                 ioh_event *event;
                 int r = read(ioh_fd(), &event, sizeof(event));
@@ -80,7 +128,7 @@ int aio_wait(void)
         for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
             AioEntry *e = &aios[i];
             int fd = e->fd;
-            if (fd >= 0 && FD_ISSET(fd, &fds)) {
+            if (fd >= 0 && FD_ISSET(fd, &readset)) {
                 __sync_bool_compare_and_swap(&e->fd, fd, -1);
                 e->cb(e->opaque);
             }
