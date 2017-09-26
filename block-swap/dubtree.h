@@ -22,6 +22,7 @@ typedef struct {
         uint64_t first64;
         uint8_t full[DUBTREE_HASH_SIZE];
     } id;
+    uint32_t size;
 } chunk_id_t;
 
 static inline void clear_chunk_id(chunk_id_t *chunk_id)

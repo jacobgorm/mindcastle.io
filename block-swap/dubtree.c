@@ -1231,6 +1231,7 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
     UnmapViewOfFile(c->buf);
 #else
     strong_hash(chunk_id.id.full, DUBTREE_HASH_SIZE, c->buf, size);
+    chunk_id.size = size;
     dubtree_handle_t f = get_chunk(t, chunk_id, 1, &l);
     if (invalid_handle(f)) {
         if (errno == EEXIST) {
@@ -1565,14 +1566,16 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
     free(ud);
 
     chunk_id_t tree_chunk;
-    strong_hash(tree_chunk.id.full, DUBTREE_HASH_SIZE, st.mem, simpletree_get_nodes_size(&st));
+    uint32_t tree_size = simpletree_get_nodes_size(&st);
+    strong_hash(tree_chunk.id.full, DUBTREE_HASH_SIZE, st.mem, tree_size);
+    tree_chunk.size = tree_size;
     int l;
-    dubtree_handle_t f = get_chunk(t, tree_chunk, 1, &l);
+    dubtree_handle_t f = get_chunk(t, tree_chunk, 1, 0, &l);
     if (invalid_handle(f)) {
         err(1, "unable to open tree chunk %"PRIx64" for write", tree_chunk.id.first64);
         return -1;
     }
-    dubtree_pwrite(f, st.mem, simpletree_get_nodes_size(&st), 0);
+    dubtree_pwrite(f, st.mem, tree_size, 0);
     put_chunk(t, l);
     simpletree_clear(&st);
 
