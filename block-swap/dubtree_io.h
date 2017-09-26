@@ -4,6 +4,7 @@
 #ifdef _WIN32
 typedef struct {
     HANDLE h;
+    void *opaque;
 } dubtree_handle_t;
 
 static inline int valid_handle(dubtree_handle_t f) {
@@ -27,18 +28,19 @@ static inline int invalid_handle(dubtree_handle_t f) {
 
 typedef struct {
     int fd;
-} dubtree_handle_t;
+    void *opaque;
+} * dubtree_handle_t;
 
 static inline int valid_handle(dubtree_handle_t f) {
-    return f.fd >= 0;
+    return (f != NULL);
 }
 
 static inline int invalid_handle(dubtree_handle_t f) {
-    return f.fd < 0;
+    return (f == NULL);
 }
 #endif
 
-extern const dubtree_handle_t DUBTREE_INVALID_HANDLE;
+#define DUBTREE_INVALID_HANDLE NULL
 
 /* Expand path using fullpath/realpath. Caller must
  * free returned result. */
@@ -51,6 +53,17 @@ static inline char *dubtree_realpath(const char *in)
 #endif
 }
 
+static inline dubtree_handle_t make_handle(int fd)
+{
+    if (fd >= 0) {
+        dubtree_handle_t r = calloc(1, sizeof(*r));
+        r->fd = fd;
+        return r;
+    } else {
+        return NULL;
+    }
+}
+
 static inline dubtree_handle_t
 dubtree_open_existing(const char *fn)
 {
@@ -59,9 +72,7 @@ dubtree_open_existing(const char *fn)
             0, NULL,
             OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
 #else
-    int f = open(fn, O_RDWR | O_NOATIME);
-    dubtree_handle_t r = {f};
-    return r;
+    return make_handle(open(fn, O_RDWR | O_NOATIME));
 #endif
 }
 
@@ -75,9 +86,7 @@ dubtree_open_existing_readonly(const char *fn)
                 FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM,
             NULL);
 #else
-    int f = open(fn, O_RDONLY | O_NOATIME);
-    dubtree_handle_t r = {f};
-    return r;
+    return make_handle(open(fn, O_RDONLY | O_NOATIME));
 #endif
 }
 
@@ -93,19 +102,17 @@ dubtree_open_new(const char *fn, int temp)
             0, NULL,
             OPEN_ALWAYS, flags, NULL);
 #else
-    int f = open(fn, O_RDWR | O_CREAT | O_EXCL | O_NOATIME, 0644);
-    dubtree_handle_t r = {f};
-    return r;
+    return make_handle(open(fn, O_RDWR | O_CREAT | O_EXCL | O_NOATIME, 0644));
 #endif
 }
 
 static inline void dubtree_set_file_size(dubtree_handle_t f, size_t sz)
 {
 #ifdef _WIN32
-    SetFilePointer(f, (DWORD)sz, 0, FILE_BEGIN);
-    SetEndOfFile(f);
+    SetFilePointer(f->handle, (DWORD)sz, 0, FILE_BEGIN);
+    SetEndOfFile(f->handle);
 #else
-    if (ftruncate(f.fd, sz)) {
+    if (ftruncate(f->fd, sz)) {
         perror("truncate");
         exit(-1);
     }
@@ -118,7 +125,7 @@ static inline int64_t dubtree_get_file_size(dubtree_handle_t f)
     return GetFileSize(f, NULL); // XXX on 32b
 #else
     struct stat st;
-    if (fstat(f.fd, &st) < 0) {
+    if (fstat(f->fd, &st) < 0) {
         //warn("unable to stat %s", s->filename);
         assert(0);
         return -1;
@@ -130,10 +137,11 @@ static inline int64_t dubtree_get_file_size(dubtree_handle_t f)
 static inline void dubtree_close_file(dubtree_handle_t f)
 {
 #ifdef _WIN32
-    CloseHandle(f);
+    CloseHandle(f->handle);
 #else
-    close(f.fd);
+    close(f->fd);
 #endif
+    free(f);
 }
 
 static inline
@@ -152,7 +160,7 @@ int dubtree_pread(dubtree_handle_t f, void *buf, size_t sz, uint64_t offset)
             return -1;
         }
     }
-    if (!GetOverlappedResult(f, &o, &got, TRUE)) {
+    if (!GetOverlappedResult(f->handle, &o, &got, TRUE)) {
         printf("GetOverlappedResult fails on line %d with error %u\n",
                 __LINE__, (uint32_t)GetLastError());
         got = -1;
@@ -161,7 +169,7 @@ int dubtree_pread(dubtree_handle_t f, void *buf, size_t sz, uint64_t offset)
 #else
     int r;
     do {
-        r = pread(f.fd, buf, sz, offset);
+        r = pread(f->fd, buf, sz, offset);
     } while (r < 0 && errno == EINTR);
     return r;
 #endif
@@ -176,14 +184,14 @@ dubtree_pwrite(dubtree_handle_t f, const void *buf, size_t sz, uint64_t offset)
     o.OffsetHigh = offset >>32ULL;
     o.Offset = offset & 0xffffffff;
 
-    if (!WriteFile(f, buf, sz, NULL, &o)) {
+    if (!WriteFile(f->handle, buf, sz, NULL, &o)) {
         if (GetLastError() != ERROR_IO_PENDING) {
             printf("%s: WriteFile fails with error %u\n",
                     __FUNCTION__, (uint32_t)GetLastError());
             return -1;
         }
     }
-    if (!GetOverlappedResult(f, &o, &wrote, TRUE)) {
+    if (!GetOverlappedResult(f->handle, &o, &wrote, TRUE)) {
         printf("GetOverlappedResult fails on line %d with error %u\n",
                 __LINE__, (uint32_t)GetLastError());
         wrote = -1;
@@ -192,7 +200,7 @@ dubtree_pwrite(dubtree_handle_t f, const void *buf, size_t sz, uint64_t offset)
 #else
     int r;
     do {
-        r = pwrite(f.fd, buf, sz, offset);
+        r = pwrite(f->fd, buf, sz, offset);
     } while (r < 0 && errno == EINTR);
     return (r == sz) ? r : -1;
 #endif

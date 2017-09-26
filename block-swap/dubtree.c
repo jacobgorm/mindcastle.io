@@ -28,9 +28,7 @@
 #include <sys/uio.h>
 #include <limits.h>
 #include <fcntl.h>
-const dubtree_handle_t DUBTREE_INVALID_HANDLE = {-1};
 #else
-const dubtree_handle_t DUBTREE_INVALID_HANDLE = {INVALID_HANDLE_VALUE};
 #endif
 
 
@@ -144,8 +142,8 @@ int dubtree_init(DubTree *t, char **fallbacks,
     }
 #else
     m = mmap(NULL, sizeof(DubTreeHeader), PROT_READ | PROT_WRITE,
-                          MAP_SHARED, f.fd, 0);
-    close(f.fd);
+                          MAP_SHARED, f->fd, 0);
+    dubtree_close_file(f);
     if (m == MAP_FAILED) {
         warn("unable to map name=%s\n", mn);
         return -1;
@@ -426,10 +424,10 @@ static int execute_reads(DubTree *t,
             v[j].iov_len = rd->size;
         }
         do {
-            r = preadv(f.fd, v, take, offset);
+            r = preadv(f->fd, v, take, offset);
         } while (r < 0 && errno == EINTR);
         if (r < 0) {
-            err(1, "preadv failed f=%d r %d", f.fd, r);
+            err(1, "preadv failed f=%d r %d", f->fd, r);
         }
     }
 #endif
@@ -534,7 +532,7 @@ static inline void *map_tree(dubtree_handle_t f)
     assert(m);
     CloseHandle(h);
 #else
-    m = mmap(NULL, sz, PROT_READ, MAP_PRIVATE, f.fd, 0);
+    m = mmap(NULL, sz, PROT_READ, MAP_PRIVATE, f->fd, 0);
     if (m == MAP_FAILED) {
         err(1, "unable to map tree\n");
     }
