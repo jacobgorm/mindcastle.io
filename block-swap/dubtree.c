@@ -552,15 +552,12 @@ static int flush_reads(DubTree *t, Chunk *c, const uint8_t *chunk0, CallbackStat
 }
 
 
-static inline void *map_tree(dubtree_handle_t f)
+static inline void *map_file(dubtree_handle_t f, uint32_t sz, int writable)
 {
     void *m;
-    uint64_t sz;
-
-    sz = dubtree_get_file_size(f);
 
 #ifdef _WIN32
-    HANDLE h = CreateFileMappingA(f, NULL, PAGE_READONLY, 0, sz, NULL);
+    HANDLE h = CreateFileMappingA(f, NULL, writable ? PAGE_READWRITE : PAGE_READONLY, 0, sz, NULL);
     if (!h) {
         Werr(1, "CreateFileMappingA fails");
     }
@@ -568,15 +565,15 @@ static inline void *map_tree(dubtree_handle_t f)
     assert(m);
     CloseHandle(h);
 #else
-    m = mmap(NULL, sz, PROT_READ, MAP_PRIVATE, f->fd, 0);
+    m = mmap(NULL, sz, PROT_READ | (writable ? PROT_WRITE : 0), writable ? MAP_SHARED : MAP_PRIVATE, f->fd, 0);
     if (m == MAP_FAILED) {
-        err(1, "unable to map tree\n");
+        err(1, "unable to map file\n");
     }
 #endif
     return m;
 }
 
-static inline void unmap_tree(void *mem, size_t size)
+static inline void unmap_file(void *mem, size_t size)
 {
 #ifdef _WIN32
     if (!UnmapViewOfFile(mem)) {
@@ -595,7 +592,7 @@ static void *__map_chunk(DubTree *t, chunk_id_t chunk_id)
         assert(0);
         return NULL;
     }
-    void *r = map_tree(f);
+    void *r = map_file(f, chunk_id.size, 0);
     __put_chunk(t, line);
     return r;
 }
@@ -677,7 +674,7 @@ static int populate_cbf(DubTree *t, int n)
                 cbf_add(&t->cbf, chunk_id.id.full);
                 ++added;
             }
-            unmap_tree(st->mem, simpletree_get_nodes_size(st));
+            unmap_file(st->mem, simpletree_get_nodes_size(st));
         }
     }
 
@@ -714,7 +711,7 @@ void dubtree_end_find(DubTree *t, void *ctx)
     for (i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
         CachedTree *ct = &fx->cached_trees[i];
         if (valid_chunk_id(&ct->chunk)) {
-            unmap_tree(ct->st.mem, simpletree_get_nodes_size(&ct->st));
+            unmap_file(ct->st.mem, simpletree_get_nodes_size(&ct->st));
             clear_chunk_id(&ct->chunk);
         }
     }
@@ -800,7 +797,7 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
         CachedTree *ct = &fx->cached_trees[i];
         if (valid_chunk_id(&ct->chunk)) {
             if (!cmp_chunk_ids(&ct->chunk, &t->levels[i])) {
-                unmap_tree(ct->st.mem, simpletree_get_nodes_size(&ct->st));
+                unmap_file(ct->st.mem, simpletree_get_nodes_size(&ct->st));
                 clear_chunk_id(&ct->chunk);
             }
         }
@@ -1035,8 +1032,7 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
         }
     }
     if (hgs->offset == hgs->chunk_id.size) {
-        dubtree_pwrite(hgs->f, hgs->buffer, hgs->offset, 0);
-        free(hgs->buffer);
+        unmap_file(hgs->f, hgs->chunk_id.size);
         hgs->f->opaque = NULL;
         free(hgs);
     }
@@ -1104,7 +1100,9 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
                     } else {
                         ch = hgs->ch = curl_easy_init();
                         f->opaque = hgs;
-                        hgs->buffer = calloc(1, chunk_id.size);
+                        dubtree_set_file_size(f, chunk_id.size);
+                        hgs->buffer = map_file(f, chunk_id.size, 1);
+                        printf("buffer @ %p, sz %x\n", hgs->buffer, chunk_id.size);
                     }
                     curl_easy_setopt(ch, CURLOPT_URL, fn);
                     curl_easy_setopt(ch, CURLOPT_WRITEDATA, hgs);
@@ -1689,7 +1687,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
                 }
             }
 
-            unmap_tree(st->mem, simpletree_get_nodes_size(st));
+            unmap_file(st->mem, simpletree_get_nodes_size(st));
             __free_chunk(t, chunk_id);
         }
     }
@@ -1718,7 +1716,7 @@ int dubtree_delete(DubTree *t)
                 __free_chunk(t, cud->chunk_ids[j]);
             }
 
-            unmap_tree(st.mem, simpletree_get_nodes_size(&st));
+            unmap_file(st.mem, simpletree_get_nodes_size(&st));
             __free_chunk(t, chunk_id);
         }
     }
@@ -1798,7 +1796,7 @@ int dubtree_sanity_check(DubTree *t)
 
                 simpletree_next(&st, &it);
             }
-            unmap_tree(st.mem, simpletree_get_nodes_size(&st));
+            unmap_file(st.mem, simpletree_get_nodes_size(&st));
         }
     }
     return 0;
