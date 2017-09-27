@@ -58,6 +58,8 @@ int aio_wait(void)
     CURLMcode mode;
     int running;
     int num_msgs;
+    struct timeval tv = {};
+    long curl_timeout;
     do {
         mode = curl_multi_perform(cmh, &running);
     } while (mode == CURLM_CALL_MULTI_PERFORM);
@@ -68,7 +70,7 @@ int aio_wait(void)
             int response;
             curl_easy_getinfo(msg->easy_handle, CURLINFO_RESPONSE_CODE,
                     &response);
-            if (response != 200) {
+            if (response != 200 && response != 206) {
                 printf("got response %u\n", response);
             }
             curl_multi_remove_handle(cmh, msg->easy_handle);
@@ -91,8 +93,6 @@ int aio_wait(void)
         }
     }
 
-    struct timeval tv = {5, 0};
-    long curl_timeout;
     curl_multi_timeout(cmh, &curl_timeout);
     if(curl_timeout >= 0) {
         tv.tv_sec = curl_timeout / 1000;
@@ -101,6 +101,9 @@ int aio_wait(void)
         } else {
             tv.tv_usec = (curl_timeout % 1000) * 1000;
         }
+    } else {
+        tv.tv_sec = 5;
+        tv.tv_usec = 0;
     }
 
     int r = select(max + 1, &readset, &writeset, &errset, &tv);
@@ -134,7 +137,11 @@ int aio_wait(void)
             }
         }
     } else {
-        dump_swapstat();
+        //dump_swapstat();
     }
-    return r;
+    if (r == 0 && curl_timeout < 0) {
+        return 1;
+    } else {
+        return 0;
+    }
 }

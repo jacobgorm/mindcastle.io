@@ -244,7 +244,7 @@ int main(int argc, char **argv)
     //uint8_t buf[8 * 512] = {1,};
     //swap_aio_write(&bs, 1, buf, 8, write_done, NULL);
     while (!should_exit) {
-        if (aio_wait() == 0 || should_flush) {
+        if (aio_wait() == 1 || should_flush) {
             swap_flush(&bs);
             should_flush = 0;
         }

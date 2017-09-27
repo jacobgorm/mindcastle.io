@@ -347,9 +347,12 @@ static void CALLBACK read_complete_scatter(DWORD rc, DWORD got, OVERLAPPED *o)
 #endif
 
 typedef struct {
+    const char *url;
     CURL *ch;
+    int active;
     chunk_id_t chunk_id;
     dubtree_handle_t f;
+    uint32_t split;
     uint32_t offset;
     CallbackState *cs;
     uint8_t *buffer; // XXX mmap this
@@ -359,6 +362,21 @@ typedef struct {
         Read *first;
         int n; } blocked_reads[256];
 } HttpGetState;
+
+static inline int reads_inside_buffer(const HttpGetState *hgs, const Read *first, int n)
+{
+    uint32_t begin = first->src_offset;
+    uint32_t end = first[n - 1].src_offset + first[n - 1].size;
+    if (hgs->offset > hgs->split) { // right side fetch
+        //printf("case 0 %x->%x? inside [%x;%x]\n", begin, end, hgs->split, hgs->offset);
+        return hgs->split <= begin && end <= hgs->offset;
+    } else if (hgs->offset < hgs->split) { // left side fetch
+        //printf("case 1 %x->%x? inside [0;%x] or [%x;%x]\n", begin, end, hgs->offset, hgs->split, hgs->chunk_id.size);
+        return end <= hgs->offset || begin >= hgs->split;
+    } else {
+        return 1;
+    }
+}
 
 static int execute_reads(DubTree *t,
         uint8_t *dst,
@@ -371,9 +389,20 @@ static int execute_reads(DubTree *t,
 
     HttpGetState *hgs = f->opaque;
     if (hgs) {
-        uint32_t end = first[n - 1].src_offset + first[n - 1].size;
-        if (end > hgs->offset) {
-            printf("block reads @ %x\n", end);
+        if (hgs->active && reads_inside_buffer(hgs, first, n)) {
+            // XXX this calls for two heaps
+            for (i = 0, rd = first; i < n; ++i, ++rd) {
+                memcpy(dst + rd->dst_offset, hgs->buffer + rd->src_offset, rd->size);
+            }
+        } else {
+            if (!hgs->active) {
+                char ranges[32];
+                sprintf(ranges, "%u-%u", first->src_offset, hgs->chunk_id.size - 1);
+                curl_easy_setopt(hgs->ch, CURLOPT_RANGE, ranges);
+                curl_multi_add_handle(cmh, hgs->ch);
+                hgs->active = 1;
+                hgs->split = hgs->offset = first->src_offset;
+            }
             increment_counter(cs);
             hgs->cs = cs;
             assert(hgs->num_blocked < 256); //XXX
@@ -382,11 +411,6 @@ static int execute_reads(DubTree *t,
             hgs->blocked_reads[hgs->num_blocked].n = n;
             ++(hgs->num_blocked);
             return 0;
-        } else {
-            Read *rd = first;
-            for (int j = 0; j < n; ++j, ++rd) {
-                memcpy(dst + rd->dst_offset, hgs->buffer + rd->src_offset, rd->size);
-            }
         }
     }
 
@@ -1010,35 +1034,6 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
     return size * nmemb;
 }
 
-static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
-{
-    HttpGetState *hgs = opaque;
-    memcpy(hgs->buffer + hgs->offset, ptr, size * nmemb);
-    hgs->offset += size * nmemb;
-    for (int i = 0; i < hgs->num_blocked; ++i) {
-        Read *first = hgs->blocked_reads[i].first;
-        if (first) {
-            int n = hgs->blocked_reads[i].n;
-            assert(n >= 1);
-            uint32_t end = first[n - 1].src_offset + first[n - 1].size;
-            if (hgs->offset >= end) {
-                Read *rd = first;
-                for (int j = 0; j < n; ++j, ++rd) {
-                    memcpy(hgs->blocked_reads[i].dst + rd->dst_offset, hgs->buffer + rd->src_offset, rd->size);
-                }
-                hgs->blocked_reads[i].first = NULL;
-                decrement_counter(hgs->cs);
-            }
-        }
-    }
-    if (hgs->offset == hgs->chunk_id.size) {
-        unmap_file(hgs->f, hgs->chunk_id.size);
-        hgs->f->opaque = NULL;
-        free(hgs);
-    }
-    return size * nmemb;
-}
-
 int curl_sockopt_cb(void *clientp, curl_socket_t curlfd, curlsocktype purpose)
 {
     int size;
@@ -1051,6 +1046,54 @@ int curl_sockopt_cb(void *clientp, curl_socket_t curlfd, curlsocktype purpose)
     }
     assert(r == 0);
     return r;
+}
+
+static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
+{
+    HttpGetState *hgs = opaque;
+    //printf("%s %x %x\n", __FUNCTION__, hgs->split, hgs->offset);
+    memcpy(hgs->buffer + hgs->offset, ptr, size * nmemb);
+    hgs->offset += size * nmemb;
+
+    for (int i = 0; i < hgs->num_blocked; ++i) {
+        Read *first = hgs->blocked_reads[i].first;
+        if (first) {
+            int n = hgs->blocked_reads[i].n;
+            assert(n >= 1);
+            if (reads_inside_buffer(hgs, first, n)) {
+                Read *rd = first;
+                for (int j = 0; j < n; ++j, ++rd) {
+                    memcpy(hgs->blocked_reads[i].dst + rd->dst_offset, hgs->buffer + rd->src_offset, rd->size);
+                }
+                hgs->blocked_reads[i].first = NULL;
+                decrement_counter(hgs->cs);
+            }
+        }
+    }
+
+    if ((hgs->offset == hgs->chunk_id.size) || (hgs->offset == hgs->split)) {
+        if (hgs->split > 0 && hgs->offset > hgs->split) {
+            hgs->offset = 0;
+            hgs->ch = curl_easy_init();
+            curl_easy_setopt(hgs->ch, CURLOPT_URL, hgs->url);
+            curl_easy_setopt(hgs->ch, CURLOPT_WRITEDATA, hgs);
+            curl_easy_setopt(hgs->ch, CURLOPT_SOCKOPTFUNCTION, curl_sockopt_cb);
+            curl_easy_setopt(hgs->ch, CURLOPT_WRITEFUNCTION, curl_data_cb2);
+            char ranges[32];
+            sprintf(ranges, "0-%u", hgs->split - 1);
+            curl_easy_setopt(hgs->ch, CURLOPT_RANGE, ranges);
+            curl_multi_add_handle(cmh, hgs->ch);
+        } else {
+            chunk_id_t tmp;
+            strong_hash(tmp.id.full, DUBTREE_HASH_SIZE, hgs->buffer, hgs->chunk_id.size);
+            assert(cmp_chunk_ids(&tmp, &hgs->chunk_id));
+            unmap_file(hgs->buffer, hgs->chunk_id.size);
+            hgs->f->opaque = NULL;
+            free((void *) hgs->url);
+            free(hgs);
+        }
+    }
+    return size * nmemb;
 }
 
 static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int dirty, int local, int *l)
@@ -1102,7 +1145,6 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
                         f->opaque = hgs;
                         dubtree_set_file_size(f, chunk_id.size);
                         hgs->buffer = map_file(f, chunk_id.size, 1);
-                        printf("buffer @ %p, sz %x\n", hgs->buffer, chunk_id.size);
                     }
                     curl_easy_setopt(ch, CURLOPT_URL, fn);
                     curl_easy_setopt(ch, CURLOPT_WRITEDATA, hgs);
@@ -1112,8 +1154,8 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
                         curl_easy_perform(ch);
                         free(hgs);
                     } else {
+                        hgs->url = strdup(fn);
                         curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, curl_data_cb2);
-                        curl_multi_add_handle(cmh, ch);
                     }
                     fn = tmp;
                 } else {
