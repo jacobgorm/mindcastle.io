@@ -21,6 +21,8 @@
 #include "block-swap.h"
 #include "ioh.h"
 
+extern void dump_swapstat(void);
+
 struct sock_info {
     int sock;
 };
@@ -250,6 +252,7 @@ int main(int argc, char **argv)
         }
     }
     swap_flush(&bs);
+    dump_swapstat();
     swap_close(&bs);
     exit(1);
     return 0;
