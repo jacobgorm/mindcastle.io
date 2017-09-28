@@ -19,7 +19,6 @@ add_executable(oneroot
     block-swap/dubtree.c
     block-swap/hashtable.c
     block-swap/simpletree.c
-    block-swap/b2.c
     block-swap/cbf.c
     )
 

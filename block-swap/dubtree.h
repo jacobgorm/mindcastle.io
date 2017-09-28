@@ -30,15 +30,16 @@ static inline void clear_chunk_id(chunk_id_t *chunk_id)
     memset(chunk_id->id.full, 0, sizeof(chunk_id->id.full));
 }
 
-static inline int cmp_chunk_ids(const chunk_id_t *a, const chunk_id_t *b)
+static inline int equal_chunk_ids(const chunk_id_t *a, const chunk_id_t *b)
 {
-    return (memcmp(a->id.full, b->id.full, sizeof(a->id.full)) == 0);
+    return (memcmp(a->id.full, b->id.full, sizeof(a->id.full)) == 0 &&
+            a->size == b->size);
 }
 
 static inline int valid_chunk_id(const chunk_id_t *chunk_id)
 {
     chunk_id_t nil = {};
-    return !cmp_chunk_ids(&nil, chunk_id);
+    return !equal_chunk_ids(&nil, chunk_id);
 }
 
 typedef struct DubTreeHeader {

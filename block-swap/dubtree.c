@@ -7,7 +7,7 @@
 #include "simpletree.h"
 #include "lz4.h"
 #include "hex.h"
-#include "stronghash.h"
+#include <blake2.h>
 
 /* These must go last or they will mess with e.g. asprintf() */
 #include <curl/curl.h>
@@ -820,7 +820,7 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
     for (i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
         CachedTree *ct = &fx->cached_trees[i];
         if (valid_chunk_id(&ct->chunk)) {
-            if (!cmp_chunk_ids(&ct->chunk, &t->levels[i])) {
+            if (!equal_chunk_ids(&ct->chunk, &t->levels[i])) {
                 unmap_file(ct->st.mem, simpletree_get_nodes_size(&ct->st));
                 clear_chunk_id(&ct->chunk);
             }
@@ -897,7 +897,7 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
 
     for (i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
         CachedTree *ct = &fx->cached_trees[i];
-        if (valid_chunk_id(&ct->chunk) && !cmp_chunk_ids(&ct->chunk, &t->levels[i])) {
+        if (valid_chunk_id(&ct->chunk) && !equal_chunk_ids(&ct->chunk, &t->levels[i])) {
             if (relevant[i]) {
                 succeeded = 0;
             }
@@ -1025,6 +1025,15 @@ static inline char *name_chunk(const char *prefix, chunk_id_t chunk_id)
     return fn;
 }
 
+void strong_hash(chunk_id_t *out, const uint8_t *in, size_t sz)
+{
+    blake2b_state s;
+    blake2b_init(&s, sizeof(out->id.full));
+    blake2b_update(&s, in, sz);
+    blake2b_final(&s, out->id.full, sizeof(out->id.full));
+    out->size = sz;
+}
+
 static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
 {
     //printf("%s\n", __FUNCTION__);
@@ -1085,8 +1094,8 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
             curl_multi_add_handle(cmh, hgs->ch);
         } else {
             chunk_id_t tmp;
-            strong_hash(tmp.id.full, DUBTREE_HASH_SIZE, hgs->buffer, hgs->chunk_id.size);
-            assert(cmp_chunk_ids(&tmp, &hgs->chunk_id));
+            strong_hash(&tmp, hgs->buffer, hgs->chunk_id.size);
+            assert(equal_chunk_ids(&tmp, &hgs->chunk_id));
             unmap_file(hgs->buffer, hgs->chunk_id.size);
             hgs->f->opaque = NULL;
             free((void *) hgs->url);
@@ -1345,8 +1354,7 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
     CloseHandle(event);
     UnmapViewOfFile(c->buf);
 #else
-    strong_hash(chunk_id.id.full, DUBTREE_HASH_SIZE, c->buf, size);
-    chunk_id.size = size;
+    strong_hash(&chunk_id, c->buf, size);
     dubtree_handle_t f = get_chunk(t, chunk_id, 1, 0, &l);
     if (invalid_handle(f)) {
         if (errno == EEXIST) {
@@ -1521,7 +1529,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
         int end = 0;
 
         /* Anything to flush before we consume input? */
-        if (n_buffered && ((!cmp_chunk_ids(&last_chunk_id, &min->chunk_id)) || done ||
+        if (n_buffered && ((!equal_chunk_ids(&last_chunk_id, &min->chunk_id)) || done ||
                     chunk_exceeded(t_buffered))) {
             int q;
 
@@ -1682,8 +1690,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
 
     chunk_id_t tree_chunk;
     uint32_t tree_size = simpletree_get_nodes_size(&st);
-    strong_hash(tree_chunk.id.full, DUBTREE_HASH_SIZE, st.mem, tree_size);
-    tree_chunk.size = tree_size;
+    strong_hash(&tree_chunk, st.mem, tree_size);
     int l;
     dubtree_handle_t f = get_chunk(t, tree_chunk, 1, 0, &l);
     if (invalid_handle(f)) {
