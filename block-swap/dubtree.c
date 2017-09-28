@@ -1047,20 +1047,24 @@ int curl_sockopt_cb(void *clientp, curl_socket_t curlfd, curlsocktype purpose)
 {
     int size;
     int r;
-    for (size = 1 << 24; size != 0; size >>= 1) {
+    for (size = 1 << 22; size != 0; size >>= 1) {
         r = setsockopt(curlfd, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size));
         if (r == 0) {
             break;
         }
     }
-    assert(r == 0);
+    for (size = 1 << 22; size != 0; size >>= 1) {
+        r = setsockopt(curlfd, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));
+        if (r == 0) {
+            break;
+        }
+    }
     return r;
 }
 
 static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
 {
     HttpGetState *hgs = opaque;
-    //printf("%s %x %x\n", __FUNCTION__, hgs->split, hgs->offset);
     memcpy(hgs->buffer + hgs->offset, ptr, size * nmemb);
     hgs->offset += size * nmemb;
 
@@ -1085,6 +1089,7 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
             hgs->offset = 0;
             hgs->ch = curl_easy_init();
             curl_easy_setopt(hgs->ch, CURLOPT_URL, hgs->url);
+            curl_easy_setopt(hgs->ch, CURLOPT_BUFFERSIZE, CURL_MAX_READ_SIZE);
             curl_easy_setopt(hgs->ch, CURLOPT_WRITEDATA, hgs);
             curl_easy_setopt(hgs->ch, CURLOPT_SOCKOPTFUNCTION, curl_sockopt_cb);
             curl_easy_setopt(hgs->ch, CURLOPT_WRITEFUNCTION, curl_data_cb2);
@@ -1156,6 +1161,7 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
                         hgs->buffer = map_file(f, chunk_id.size, 1);
                     }
                     curl_easy_setopt(ch, CURLOPT_URL, fn);
+                    curl_easy_setopt(ch, CURLOPT_BUFFERSIZE, CURL_MAX_READ_SIZE);
                     curl_easy_setopt(ch, CURLOPT_WRITEDATA, hgs);
                     curl_easy_setopt(ch, CURLOPT_SOCKOPTFUNCTION, curl_sockopt_cb);
                     if (local) {
