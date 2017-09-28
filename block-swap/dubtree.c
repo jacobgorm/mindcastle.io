@@ -348,7 +348,7 @@ static void CALLBACK read_complete_scatter(DWORD rc, DWORD got, OVERLAPPED *o)
 
 typedef struct {
     const char *url;
-    CURL *ch;
+    CURL *chs[2];
     int active;
     chunk_id_t chunk_id;
     dubtree_handle_t f;
@@ -396,10 +396,11 @@ static int execute_reads(DubTree *t,
             }
         } else {
             if (!hgs->active) {
+                CURL *ch = hgs->chs[0];
                 char ranges[32];
                 sprintf(ranges, "%u-%u", first->src_offset, hgs->chunk_id.size - 1);
-                curl_easy_setopt(hgs->ch, CURLOPT_RANGE, ranges);
-                curl_multi_add_handle(cmh, hgs->ch);
+                curl_easy_setopt(ch, CURLOPT_RANGE, ranges);
+                curl_multi_add_handle(cmh, ch);
                 hgs->active = 1;
                 hgs->split = hgs->offset = first->src_offset;
             }
@@ -1034,15 +1035,6 @@ void strong_hash(chunk_id_t *out, const uint8_t *in, size_t sz)
     out->size = sz;
 }
 
-static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
-{
-    //printf("%s\n", __FUNCTION__);
-    HttpGetState *hgs = opaque;
-    dubtree_pwrite(hgs->f, ptr, size * nmemb, hgs->offset);
-    hgs->offset += size * nmemb;
-    return size * nmemb;
-}
-
 int curl_sockopt_cb(void *clientp, curl_socket_t curlfd, curlsocktype purpose)
 {
     int size;
@@ -1087,16 +1079,10 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
     if ((hgs->offset == hgs->chunk_id.size) || (hgs->offset == hgs->split)) {
         if (hgs->split > 0 && hgs->offset > hgs->split) {
             hgs->offset = 0;
-            hgs->ch = curl_easy_init();
-            curl_easy_setopt(hgs->ch, CURLOPT_URL, hgs->url);
-            curl_easy_setopt(hgs->ch, CURLOPT_BUFFERSIZE, CURL_MAX_READ_SIZE);
-            curl_easy_setopt(hgs->ch, CURLOPT_WRITEDATA, hgs);
-            curl_easy_setopt(hgs->ch, CURLOPT_SOCKOPTFUNCTION, curl_sockopt_cb);
-            curl_easy_setopt(hgs->ch, CURLOPT_WRITEFUNCTION, curl_data_cb2);
             char ranges[32];
             sprintf(ranges, "0-%u", hgs->split - 1);
-            curl_easy_setopt(hgs->ch, CURLOPT_RANGE, ranges);
-            curl_multi_add_handle(cmh, hgs->ch);
+            curl_easy_setopt(hgs->chs[1], CURLOPT_RANGE, ranges);
+            curl_multi_add_handle(cmh, hgs->chs[1]);
         } else {
             chunk_id_t tmp;
             strong_hash(&tmp, hgs->buffer, hgs->chunk_id.size);
@@ -1108,6 +1094,45 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
         }
     }
     return size * nmemb;
+}
+
+static dubtree_handle_t prepare_http_get(chunk_id_t chunk_id, int synchronous,
+        const char *url)
+{
+    char *tmp = name_chunk("/home/jacob/dev/oneroot/cache/", chunk_id);
+    dubtree_handle_t f = dubtree_open_new(tmp, 0);
+    HttpGetState *hgs = calloc(1, sizeof(*hgs));
+    hgs->chunk_id = chunk_id;
+    hgs->url = strdup(url);
+    dubtree_set_file_size(f, chunk_id.size);
+    hgs->buffer = map_file(f, chunk_id.size, 1);
+    f->opaque = hgs;
+    hgs->f = f;
+
+    int n;
+    if (synchronous) {
+        n = 1;
+        static CURL *shared_ch = NULL;
+        if (!shared_ch) {
+            shared_ch = curl_easy_init();
+        }
+        hgs->chs[0] = shared_ch;
+        hgs->chs[1] = NULL;
+    } else {
+        n = 2;
+        for (int i = 0; i < n; ++i) {
+            hgs->chs[i] = curl_easy_init();
+        }
+    }
+    for (int i = 0; i < n; ++i) {
+        CURL *ch = hgs->chs[i];
+        curl_easy_setopt(ch, CURLOPT_URL, url);
+        curl_easy_setopt(ch, CURLOPT_BUFFERSIZE, CURL_MAX_READ_SIZE);
+        curl_easy_setopt(ch, CURLOPT_WRITEDATA, hgs);
+        curl_easy_setopt(ch, CURLOPT_SOCKOPTFUNCTION, curl_sockopt_cb);
+        curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, curl_data_cb2);
+    }
+    return f;
 }
 
 static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int dirty, int local, int *l)
@@ -1134,45 +1159,12 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
                     dubtree_open_existing(fn);
             } else {
                 if (!memcmp("http://", fn, 7) || !memcmp("https://", fn, 8)) {
-                    const char *end = fn + strlen(fn);
-                    while (*end != '/') {
-                        --end;
-                    }
-                    ++end;
-                    char *tmp;
-                    asprintf(&tmp, "/home/jacob/dev/oneroot/cache/%s", end);
-                    //printf("redirect to %s\n", tmp);
-
-                    dubtree_handle_t redir = dubtree_open_new(tmp, 0);
-                    HttpGetState *hgs = calloc(1, sizeof(*hgs));
-                    hgs->chunk_id = chunk_id;
-                    f = hgs->f = redir;
-                    static CURL *shared_ch = NULL;
-                    CURL *ch;
+                    f = prepare_http_get(chunk_id, local, fn);
                     if (local) {
-                        if (!shared_ch) {
-                            shared_ch = curl_easy_init();
-                        }
-                        ch = shared_ch;
-                    } else {
-                        ch = hgs->ch = curl_easy_init();
-                        f->opaque = hgs;
-                        dubtree_set_file_size(f, chunk_id.size);
-                        hgs->buffer = map_file(f, chunk_id.size, 1);
+                        HttpGetState *hgs = f->opaque;
+                        curl_easy_perform(hgs->chs[0]);
+                        hgs->f->opaque = NULL;
                     }
-                    curl_easy_setopt(ch, CURLOPT_URL, fn);
-                    curl_easy_setopt(ch, CURLOPT_BUFFERSIZE, CURL_MAX_READ_SIZE);
-                    curl_easy_setopt(ch, CURLOPT_WRITEDATA, hgs);
-                    curl_easy_setopt(ch, CURLOPT_SOCKOPTFUNCTION, curl_sockopt_cb);
-                    if (local) {
-                        curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, curl_data_cb);
-                        curl_easy_perform(ch);
-                        free(hgs);
-                    } else {
-                        hgs->url = strdup(fn);
-                        curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, curl_data_cb2);
-                    }
-                    fn = tmp;
                 } else {
                     f = dubtree_open_existing_readonly(fn);
                 }
