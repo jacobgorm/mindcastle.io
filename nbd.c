@@ -173,7 +173,7 @@ int main(int argc, char **argv)
     if (!file_exists(fn)) {
         swap_create(fn, 100 << 20, 0);
     }
-    swap_open(&bs, "foo.swap", 0);
+    swap_open(&bs, fn, 0);
 
     int sp[2];
     r = socketpair(AF_UNIX, SOCK_STREAM, 0, sp);
