@@ -1013,7 +1013,7 @@ static inline void sift_down(DubTree *t, HeapElem **hp, size_t end)
     }
 }
 
-#define io_sz (1<<23)
+#define io_sz (1<<20)
 
 static inline char *name_chunk(const char *prefix, chunk_id_t chunk_id)
 {
@@ -1142,6 +1142,11 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
     LruCacheLine *cl;
 
     if (hashtable_find(&t->ht, chunk_id.id.first64, &line)) {
+        if (dirty) {
+            errno = EEXIST;
+            return DUBTREE_INVALID_HANDLE;
+        }
+        assert(!dirty);
         cl = lru_cache_touch_line(&t->lru, line);
         ++(cl->users);
         CacheLineUserData *ud = (CacheLineUserData *) cl->value;
@@ -1356,9 +1361,9 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
     dubtree_handle_t f = get_chunk(t, chunk_id, 1, 0, &l);
     if (invalid_handle(f)) {
         if (errno == EEXIST) {
-            printf("not writing pre-existing chunk %"PRIx64"\n", chunk_id.id.first64);
+            printf("not writing pre-existing chunk %"PRIx64"\n", be64toh(chunk_id.id.first64));
         } else {
-            err(1, "unable to write chunk %"PRIx64, chunk_id.id.first64);
+            err(1, "unable to write chunk %"PRIx64, be64toh(chunk_id.id.first64));
             goto out;
         }
     } else {
@@ -1532,12 +1537,33 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
             int q;
 
             if (chunk_exceeded(t_buffered)) {
-                assert(valid_chunk_id(&last_chunk_id));
                 int chunk = add_chunk_id(&ud);
-                set_chunk_id(ud, chunk, last_chunk_id);
+                if (valid_chunk_id(&last_chunk_id)) {
+                    set_chunk_id(ud, chunk, last_chunk_id);
+                } else {
+                    const uint8_t *b = values + buffered[0].offset;
+                    strong_hash(&out_id, b, t_buffered);
+
+                    int l;
+                    assert(valid_chunk_id(&out_id));
+                    dubtree_handle_t f = get_chunk(t, out_id, 1, 0, &l);
+                    if (invalid_handle(f)) {
+                        if (errno == EEXIST) {
+                            printf("not writing pre-existing chunk %"PRIx64"\n", be64toh(out_id.id.first64));
+                        } else {
+                            err(1, "unable to write chunk %"PRIx64, be64toh(out_id.id.first64));
+                        }
+                    } else {
+                        dubtree_pwrite(f, b, t_buffered, 0);
+                        put_chunk(t, l);
+                    }
+
+                    set_chunk_id(ud, chunk, out_id);
+                }
+                uint32_t subtract = buffered[0].offset;
                 for (q = 0; q < n_buffered; ++q) {
                     e = &buffered[q];
-                    insert_kv(&st, e->key, chunk, e->offset, e->size);
+                    insert_kv(&st, e->key, chunk, e->offset - subtract, e->size);
                     total += e->size;
                 }
 
@@ -1665,9 +1691,9 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
         sift_down(t, heap, j);
     }
 
-    if (ud->num_chunks - prev_n_chunks + t->cbf.n > t->cbf.max) {
+    if (ud->num_chunks + t->cbf.n > t->cbf.max) {
         printf("rebuild %d %d %d %d\n", ud->num_chunks, prev_n_chunks, t->cbf.n, t->cbf.max);
-        populate_cbf(t, ud->num_chunks - prev_n_chunks);
+        populate_cbf(t, ud->num_chunks);
     }
 
     for (int i = 0; i < ud->num_chunks; ++i) {

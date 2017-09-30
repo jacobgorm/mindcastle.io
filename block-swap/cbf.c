@@ -65,7 +65,7 @@ int cbf_add(CBF *cbf, const uint8_t *key)
 {
     int overflow = cbf_modify(cbf, key, 1);
     if (overflow || cbf->n > cbf->max) {
-        printf("OVERFLOWING!\n");
+        printf("OVERFLOWING %d!\n", overflow);
         assert(0);
         return 1;
     }
