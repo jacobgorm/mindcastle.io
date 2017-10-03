@@ -545,7 +545,6 @@ static void *
 #endif
 swap_insert_thread(void * _s)
 {
-    printf("%s\n", __FUNCTION__);
     BDRVSwapState *s = _s;
     struct insert_context *c;
     int quit;
@@ -730,7 +729,7 @@ wait:
             sizes = realloc(sizes, sizeof(sizes[0]) * max);
         }
 
-        /* The skip check about only works for duplicates already queued,
+        /* The skip check above only works for duplicates already queued,
          * not ones that could arrive when not holding lock. So we have to
          * re-check here. */
         if (n && keys[n - 1] == key) {
