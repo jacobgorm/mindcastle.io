@@ -1,0 +1,70 @@
+This repository contains the 'oneroot' distributed block device, whose aim is
+to eventually become the 'git for storage'. It is currently mostly useful for
+local use, and for creating read-only mounts that can be exported simply by
+placing the chunked files it creates on an HTTP somewhere, for instance on S3
+or Google Storage. It supports fetching remote objects on demand, but currently
+you have to push them to the cloud or your own HTTP server, e.g, using a tool
+like rclone or rsync.
+
+To build on debian/ubuntu, you need to install:
+
+* cmake
+* ninja-build
+* liblz4-dev
+* libb2-dev
+* libcurl4-gnutls-dev (or other libcurl-dev package)
+
+Then you can build with:
+
+$ make
+
+Run with (must be root, prefix with sudo if that is your thing):
+
+# modprobe nbd
+# oneroot mydisk.swap
+
+oneroot implements a user-space block device on top of Linux' nbd module.  The
+mydisk.swap file is a tiny meta-data text file that will be created if not
+there already. The actual disk contents will go inside a directory called
+swapdata-UUID, where UUID gets randomly generated. As long as oneroot is
+running, you now have an empty block device that you can format with (in
+another shell/window):
+
+# mkfs.xfs /dev/nbd0 
+
+and mount with
+
+# mount /dev/nbd0 /mnt
+
+If you peek inside swapdata-UUID, you will see a lot of regularly-sized files
+(currently the chunking size is set to 1MiB) with some insanely long file names.
+The file names are derived from the blake2b-hashes of the file contents, as you
+can verify by running the 'b2sum' tool against one of them. There is one file that is
+special, it is called 'top.lvl' and represents the root of the tree structure. If you wanted to
+create a writable snapshot of the disk state, you could do it like this:
+
+# sync
+# mkdir my-swapshot
+# ln swapdata-UUID/* -t my-snapshot
+
+And if you wanted to publish it on an HTTP server, say running out of /srv/http, you would do
+something line this (assuming the HTTP server serves files out /srv/http and there is a http
+user on the system that the server is running as):
+
+# cp -r swapdata-UUID /srv/http
+# chown -R http /srv/http/swapdata-UUID 
+
+Then, to be able to mount HTTP-repo from another host, you would copy and edit mydisk.swap to look
+something like this:
+
+uuid=cc3e3ede-9e75-4b41-8405-8f9f1c6b8473
+size=104857600
+fallback=http://localhost/swapdata-cc3e3ede-9e75-4b41-8405-8f9f1c6b8473
+
+Then, on the client machine, you could connect the block device with:
+
+# oneroot mydisk.swap
+
+and mount it with
+
+# mount /dev/nbd0 /mnt
