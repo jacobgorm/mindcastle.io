@@ -106,6 +106,16 @@ dubtree_open_new(const char *fn, int temp)
 #endif
 }
 
+static inline dubtree_handle_t
+dubtree_open_tmp(const char *dn)
+{
+#ifdef _WIN32
+    assert(0);
+#else
+    return make_handle(open(dn, O_RDWR | O_NOATIME | O_TMPFILE, 0644));
+#endif
+}
+
 static inline void dubtree_set_file_size(dubtree_handle_t f, size_t sz)
 {
 #ifdef _WIN32

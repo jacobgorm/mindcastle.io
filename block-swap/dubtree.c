@@ -347,6 +347,7 @@ static void CALLBACK read_complete_scatter(DWORD rc, DWORD got, OVERLAPPED *o)
 #endif
 
 typedef struct {
+    DubTree *t;
     const char *url;
     CURL *chs[2];
     int active;
@@ -1057,6 +1058,7 @@ int curl_sockopt_cb(void *clientp, curl_socket_t curlfd, curlsocktype purpose)
 static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
 {
     HttpGetState *hgs = opaque;
+    DubTree *t = hgs->t;
     memcpy(hgs->buffer + hgs->offset, ptr, size * nmemb);
     hgs->offset += size * nmemb;
 
@@ -1084,9 +1086,16 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
             curl_easy_setopt(hgs->chs[1], CURLOPT_RANGE, ranges);
             curl_multi_add_handle(cmh, hgs->chs[1]);
         } else {
-            chunk_id_t tmp;
-            strong_hash(&tmp, hgs->buffer, hgs->chunk_id.size);
-            assert(equal_chunk_ids(&tmp, &hgs->chunk_id));
+            char procfn[32];
+            sprintf(procfn, "/proc/self/fd/%d", hgs->f->fd);
+            chunk_id_t chunk_id;
+            strong_hash(&chunk_id, hgs->buffer, hgs->chunk_id.size);
+            assert(equal_chunk_ids(&chunk_id, &hgs->chunk_id));
+            char *fn = name_chunk(t->fallbacks[0], chunk_id);
+            int r = linkat(AT_FDCWD, procfn, AT_FDCWD, fn, AT_SYMLINK_FOLLOW);
+            if (r < 0) {
+                err(1, "linkat failed for %d -> %s", hgs->f->fd, fn);
+            }
             unmap_file(hgs->buffer, hgs->chunk_id.size);
             hgs->f->opaque = NULL;
             free((void *) hgs->url);
@@ -1096,13 +1105,17 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
     return size * nmemb;
 }
 
-static dubtree_handle_t prepare_http_get(chunk_id_t chunk_id, int synchronous,
-        const char *url)
+static dubtree_handle_t prepare_http_get(DubTree *t, const chunk_id_t chunk_id,
+        int synchronous, const char *url)
 {
-    char *tmp = name_chunk("/home/jacob/dev/oneroot/cache/", chunk_id);
-    dubtree_handle_t f = dubtree_open_new(tmp, 0);
+    printf("fetching %s ...\n", url);
+    dubtree_handle_t f = dubtree_open_tmp(t->fallbacks[0]);
+    if (invalid_handle(f)) {
+        err(1, "unable to create tmp file\n");
+    }
     HttpGetState *hgs = calloc(1, sizeof(*hgs));
     hgs->chunk_id = chunk_id;
+    hgs->t = t;
     hgs->url = strdup(url);
     dubtree_set_file_size(f, chunk_id.size);
     hgs->buffer = map_file(f, chunk_id.size, 1);
@@ -1164,7 +1177,7 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
                     dubtree_open_existing(fn);
             } else {
                 if (!memcmp("http://", fn, 7) || !memcmp("https://", fn, 8)) {
-                    f = prepare_http_get(chunk_id, local, fn);
+                    f = prepare_http_get(t, chunk_id, local, fn);
                     if (local) {
                         HttpGetState *hgs = f->opaque;
                         curl_easy_perform(hgs->chs[0]);
