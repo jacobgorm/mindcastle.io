@@ -1261,7 +1261,9 @@ static int unlink_chunk(DubTree *t, chunk_id_t chunk_id, dubtree_handle_t f)
     free(fn);
 
 #ifndef _WIN32
-    dubtree_close_file(f);
+    if (valid_handle(f)) {
+        dubtree_close_file(f);
+    }
 #endif
     return 0;
 }
