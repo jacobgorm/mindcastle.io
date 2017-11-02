@@ -31,6 +31,10 @@
 #else
 #endif
 
+#ifndef CURL_MAX_READ_SIZE
+#define CURL_MAX_READ_SIZE (1<<19)
+#endif
+
 extern CURLM *cmh;
 
 void dubtree_close(DubTree *t)

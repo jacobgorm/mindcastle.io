@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.4)
 
-set(CMAKE_C_FLAGS "-Wall -Werror -Ofast -Wfatal-errors -g")
+set(CMAKE_C_FLAGS "-Wall -Werror -Ofast -Wfatal-errors -Wno-unused-result -g")
 
 #set (SANITIZE 1)
 if (SANITIZE)
-set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer -g")
+set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
 endif()
 
 include_directories(

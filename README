@@ -13,6 +13,7 @@ To build on debian/ubuntu, you need to install:
 * liblz4-dev
 * libb2-dev
 * libcurl4-gnutls-dev (or other libcurl-dev package)
+* uuid-dev
 
 Then you can build with:
 
