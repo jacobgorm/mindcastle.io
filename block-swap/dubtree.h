@@ -27,7 +27,7 @@ typedef struct {
 
 static inline void clear_chunk_id(chunk_id_t *chunk_id)
 {
-    memset(chunk_id->id.full, 0, sizeof(chunk_id->id.full));
+    memset(chunk_id, 0, sizeof(*chunk_id));
 }
 
 static inline int equal_chunk_ids(const chunk_id_t *a, const chunk_id_t *b)
