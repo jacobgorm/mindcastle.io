@@ -1,20 +1,7 @@
 #ifndef __DUBTREE_IO_H__
 #define __DUBTREE_IO_H__
 
-#ifdef _WIN32
-typedef struct {
-    HANDLE h;
-    void *opaque;
-} dubtree_handle_t;
-
-static inline int valid_handle(dubtree_handle_t f) {
-    return f.fd != INVALID_HANDLE_VALUE;
-}
-
-static inline int invalid_handle(dubtree_handle_t f) {
-    return f.h == INVALID_HANDLE_VALUE;
-}
-#else
+#ifndef _WIN32
 #include <unistd.h>
 #include <errno.h>
 #include <sys/types.h>
@@ -24,10 +11,15 @@ static inline int invalid_handle(dubtree_handle_t f) {
 #ifndef O_NOATIME
 #define O_NOATIME 01000000
 #endif
+#endif
 
 
 typedef struct {
+#ifdef _WIN32
+    HANDLE h;
+#else
     int fd;
+#endif
     void *opaque;
 } * dubtree_handle_t;
 
@@ -38,7 +30,6 @@ static inline int valid_handle(dubtree_handle_t f) {
 static inline int invalid_handle(dubtree_handle_t f) {
     return (f == NULL);
 }
-#endif
 
 #define DUBTREE_INVALID_HANDLE NULL
 
