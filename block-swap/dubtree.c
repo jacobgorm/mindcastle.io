@@ -284,6 +284,17 @@ static void set_event_cb(void *opaque, int result)
 {
 #ifdef _WIN32
     SetEvent(opaque);
+#else
+    if (opaque) {
+        int fd = (int) (intptr_t) opaque;
+        char msg = 1;
+        int r = write(fd, &msg, sizeof(msg));
+        if (r != sizeof(msg)) {
+            fprintf(stderr, "r=%d write err %s\n", r, strerror(errno));
+        }
+        assert(r == sizeof(msg));
+        close(fd);
+    }
 #endif
 }
 
@@ -359,10 +370,10 @@ typedef struct {
     dubtree_handle_t f;
     uint32_t split;
     uint32_t offset;
-    CallbackState *cs;
     uint8_t *buffer; // XXX mmap this
     int num_blocked;
     struct {
+        CallbackState *cs;
         uint8_t *dst;
         Read *first;
         int n; } blocked_reads[256];
@@ -399,6 +410,7 @@ static int execute_reads(DubTree *t,
             for (i = 0, rd = first; i < n; ++i, ++rd) {
                 memcpy(dst + rd->dst_offset, hgs->buffer + rd->src_offset, rd->size);
             }
+            free(first);
         } else {
             if (!hgs->active) {
                 CURL *ch = hgs->chs[0];
@@ -410,14 +422,14 @@ static int execute_reads(DubTree *t,
                 hgs->split = hgs->offset = first->src_offset;
             }
             increment_counter(cs);
-            hgs->cs = cs;
             assert(hgs->num_blocked < 256); //XXX
+            hgs->blocked_reads[hgs->num_blocked].cs = cs;
             hgs->blocked_reads[hgs->num_blocked].dst = dst;
             hgs->blocked_reads[hgs->num_blocked].first = first;
             hgs->blocked_reads[hgs->num_blocked].n = n;
             ++(hgs->num_blocked);
-            return 0;
         }
+        return 0;
     }
 
 #ifdef _WIN32
@@ -1077,7 +1089,8 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
                     memcpy(hgs->blocked_reads[i].dst + rd->dst_offset, hgs->buffer + rd->src_offset, rd->size);
                 }
                 hgs->blocked_reads[i].first = NULL;
-                decrement_counter(hgs->cs);
+                decrement_counter(hgs->blocked_reads[i].cs);
+                free(first);
             }
         }
     }
@@ -1100,6 +1113,7 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
             if (r < 0) {
                 err(1, "linkat failed for %d -> %s", hgs->f->fd, fn);
             }
+            free(fn);
             unmap_file(hgs->buffer, hgs->chunk_id.size);
             hgs->f->opaque = NULL;
             free((void *) hgs->url);
@@ -1112,7 +1126,7 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
 static dubtree_handle_t prepare_http_get(DubTree *t, const chunk_id_t chunk_id,
         int synchronous, const char *url)
 {
-    printf("fetching %s ...\n", url);
+    //printf("fetching %s ...\n", url);
     dubtree_handle_t f = dubtree_open_tmp(t->fallbacks[0]);
     if (invalid_handle(f)) {
         err(1, "unable to create tmp file\n");
@@ -1180,7 +1194,6 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
                     if (local) {
                         HttpGetState *hgs = f->opaque;
                         curl_easy_perform(hgs->chs[0]);
-                        hgs->f->opaque = NULL;
                     }
                 } else {
                     f = dubtree_open_existing_readonly(fn);
@@ -1346,12 +1359,16 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
     HANDLE event = CreateEvent(NULL, TRUE, FALSE, NULL);
     cs->cb = set_event_cb;
     cs->opaque = (void *) event;
-
 #else
     c->buf = t->malloc_cb(t->opaque, size);
     if (!c->buf) {
         errx(1, "%s: malloc failed", __FUNCTION__);
     }
+    int fds[2];
+    int r = pipe2(fds, O_DIRECT);
+    assert(r >= 0);
+    cs->cb = set_event_cb;
+    cs->opaque = (void *) (intptr_t) fds[1];
 #endif
 
     flush_reads(t, c, chunk0, cs);
@@ -1371,6 +1388,10 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
     CloseHandle(event);
     UnmapViewOfFile(c->buf);
 #else
+    char msg;
+    r = read(fds[0], &msg, sizeof(msg));
+    assert(r == sizeof(msg) && msg == 1);
+    close(fds[0]);
     strong_hash(&chunk_id, c->buf, size);
     dubtree_handle_t f = get_chunk(t, chunk_id, 1, 0, &l);
     if (invalid_handle(f)) {
