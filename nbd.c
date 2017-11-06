@@ -164,8 +164,19 @@ int main(int argc, char **argv)
     sig.sa_handler = signal_handler;
     sigemptyset(&sig.sa_mask);
     sig.sa_flags = 0;
-    sigaction(SIGHUP, &sig, NULL);
-    sigaction(SIGINT, &sig, NULL);
+    for (int i = 1; i < 31; ++i) {
+        switch (i) {
+            case SIGHUP:
+            case SIGINT:
+                sigaction(i, &sig, NULL);
+                break;
+            default:
+                /* some versions of linux will disconnect nbd
+                 * if getting signalled, so ignore as many as we can. */
+                signal(i, SIG_IGN);
+                break;
+        }
+    }
 
     ioh_init();
     aio_init();
