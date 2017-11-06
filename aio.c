@@ -33,6 +33,11 @@ void aio_init(void)
     cmh = curl_multi_init();
 }
 
+void aio_close(void)
+{
+    curl_multi_cleanup(cmh);
+}
+
 void aio_add_wait_object(int fd, void (*cb) (void *opaque), void *opaque) {
     for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
         AioEntry *e = &aios[i];

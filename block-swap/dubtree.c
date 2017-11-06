@@ -37,37 +37,6 @@
 
 extern CURLM *cmh;
 
-void dubtree_close(DubTree *t)
-{
-    char **fb;
-
-    hashtable_clear(&t->ht);
-    for (int i = 0; i < (1 << t->lru.log_lines); ++i) {
-        LruCacheLine *cl = lru_cache_get_line(&t->lru, i);
-        free((void *) cl->value);
-    }
-    lru_cache_close(&t->lru);
-
-    free(t->buffered);
-
-    fb = t->fallbacks;
-    while (*fb) {
-        free(*fb++);
-    }
-
-#ifdef _WIN32
-    if (!FlushViewOfFile(t->header, 0)) {
-        Wwarn("FlushViewOfFile");
-    }
-    UnmapViewOfFile(t->header);
-#else
-    if (msync(t->header, sizeof(DubTreeHeader), MS_SYNC) != 0) {
-        warn("msync");
-    }
-    munmap(t->header, sizeof(DubTreeHeader));
-#endif
-}
-
 static int populate_cbf(DubTree *t, int n);
 
 typedef struct {
@@ -362,12 +331,13 @@ static void CALLBACK read_complete_scatter(DWORD rc, DWORD got, OVERLAPPED *o)
 #endif
 
 typedef struct {
+    int refcount;
     DubTree *t;
-    const char *url;
+    char *url;
     CURL *chs[2];
     int active;
     chunk_id_t chunk_id;
-    dubtree_handle_t f;
+    int fd;
     uint32_t split;
     uint32_t offset;
     uint8_t *buffer; // XXX mmap this
@@ -378,6 +348,18 @@ typedef struct {
         Read *first;
         int n; } blocked_reads[256];
 } HttpGetState;
+
+static inline HttpGetState *hgs_ref(HttpGetState *hgs) {
+    ++(hgs->refcount);
+    return hgs;
+}
+
+static inline void hgs_deref(HttpGetState *hgs) {
+    if (--(hgs->refcount) == 0) {
+        free(hgs->url);
+        free(hgs);
+    }
+}
 
 static inline int reads_inside_buffer(const HttpGetState *hgs, const Read *first, int n)
 {
@@ -404,7 +386,7 @@ static int execute_reads(DubTree *t,
     Read *rd;
 
     HttpGetState *hgs = f->opaque;
-    if (hgs) {
+    if (hgs && hgs->buffer) {
         if (hgs->active && reads_inside_buffer(hgs, first, n)) {
             // XXX this calls for two heaps
             for (i = 0, rd = first; i < n; ++i, ++rd) {
@@ -1071,6 +1053,15 @@ int curl_sockopt_cb(void *clientp, curl_socket_t curlfd, curlsocktype purpose)
     return r;
 }
 
+static void close_chunk_file(dubtree_handle_t f)
+{
+    assert(f);
+    if (f->opaque) {
+        hgs_deref(f->opaque);
+    }
+    dubtree_close_file(f);
+}
+
 static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
 {
     HttpGetState *hgs = opaque;
@@ -1097,6 +1088,7 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
 
     if ((hgs->offset == hgs->chunk_id.size) || (hgs->offset == hgs->split)) {
         if (hgs->split > 0 && hgs->offset > hgs->split) {
+            hgs = hgs_ref(hgs);
             hgs->offset = 0;
             char ranges[32];
             sprintf(ranges, "0-%u", hgs->split - 1);
@@ -1104,21 +1096,22 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
             curl_multi_add_handle(cmh, hgs->chs[1]);
         } else {
             char procfn[32];
-            sprintf(procfn, "/proc/self/fd/%d", hgs->f->fd);
+            sprintf(procfn, "/proc/self/fd/%d", hgs->fd);
             chunk_id_t chunk_id;
             strong_hash(&chunk_id, hgs->buffer, hgs->chunk_id.size);
             assert(equal_chunk_ids(&chunk_id, &hgs->chunk_id));
             char *fn = name_chunk(t->fallbacks[0], chunk_id);
             int r = linkat(AT_FDCWD, procfn, AT_FDCWD, fn, AT_SYMLINK_FOLLOW);
+            close(hgs->fd);
             if (r < 0) {
-                err(1, "linkat failed for %d -> %s", hgs->f->fd, fn);
+                err(1, "linkat failed for %d -> %s", hgs->fd, fn);
             }
             free(fn);
-            unmap_file(hgs->buffer, hgs->chunk_id.size);
-            hgs->f->opaque = NULL;
-            free((void *) hgs->url);
-            free(hgs);
+            void *b = hgs->buffer;
+            hgs->buffer = NULL;
+            unmap_file(b, hgs->chunk_id.size);
         }
+        hgs_deref(hgs);
     }
     return size * nmemb;
 }
@@ -1131,14 +1124,13 @@ static dubtree_handle_t prepare_http_get(DubTree *t, const chunk_id_t chunk_id,
     if (invalid_handle(f)) {
         err(1, "unable to create tmp file\n");
     }
-    HttpGetState *hgs = calloc(1, sizeof(*hgs));
+    HttpGetState *hgs = hgs_ref(calloc(1, sizeof(*hgs)));
     hgs->chunk_id = chunk_id;
     hgs->t = t;
     hgs->url = strdup(url);
     dubtree_set_file_size(f, chunk_id.size);
     hgs->buffer = map_file(f, chunk_id.size, 1);
-    f->opaque = hgs;
-    hgs->f = f;
+    hgs->fd = dup(f->fd);
 
     int n;
     if (synchronous) {
@@ -1163,6 +1155,8 @@ static dubtree_handle_t prepare_http_get(DubTree *t, const chunk_id_t chunk_id,
         curl_easy_setopt(ch, CURLOPT_SOCKOPTFUNCTION, curl_sockopt_cb);
         curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, curl_data_cb2);
     }
+
+    f->opaque = hgs_ref(hgs);
     return f;
 }
 
@@ -1214,12 +1208,19 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
             assert(ud);
             if (cl->key) {
                 hashtable_delete(&t->ht, cl->key);
-                dubtree_close_file(ud->f);
+                close_chunk_file(ud->f);
                 clear_chunk_id(&ud->chunk_id);
-                ud->f = DUBTREE_INVALID_HANDLE;
+                memset(ud, 0, sizeof(*ud));
+            } else {
+                if (valid_handle(ud->f)) {
+                    fprintf(stderr, "warning: dangling file handle %p\n", ud->f);
+                }
             }
 
+            assert(valid_chunk_id(&chunk_id));
+
             cl->key = chunk_id.id.first64;
+            assert(cl->key);
             cl->users = 1;
             ud->chunk_id = chunk_id;
             ud->f = f;
@@ -1261,7 +1262,7 @@ static int unlink_chunk(DubTree *t, chunk_id_t chunk_id, dubtree_handle_t f)
             Wwarn("err setting delete disposition for chunk=%"PRIx64"",
                   chunk_id);
         }
-        dubtree_close_file(f);
+        close_chunk_file(f);
         return 0;
 #endif
     }
@@ -1274,7 +1275,7 @@ static int unlink_chunk(DubTree *t, chunk_id_t chunk_id, dubtree_handle_t f)
 
 #ifndef _WIN32
     if (valid_handle(f)) {
-        dubtree_close_file(f);
+        close_chunk_file(f);
     }
 #endif
     return 0;
@@ -1327,6 +1328,7 @@ static inline void __free_chunk(DubTree *t, chunk_id_t chunk_id)
             f = ud->f;
             hashtable_delete(&t->ht, cl->key);
             cl->key = 0;
+            memset(ud, 0, sizeof(*ud));
         }
     }
 
@@ -1828,6 +1830,45 @@ int dubtree_delete(DubTree *t)
 
     return 0;
 }
+
+void dubtree_close(DubTree *t)
+{
+    char **fb;
+
+    hashtable_clear(&t->ht);
+    for (int i = 0; i < (1 << t->lru.log_lines); ++i) {
+        LruCacheLine *cl = lru_cache_get_line(&t->lru, i);
+        CacheLineUserData *ud = (CacheLineUserData *) cl->value;
+        if (ud) {
+            dubtree_handle_t f = ud->f;
+            if (f) {
+                close_chunk_file(f);
+            }
+            free(ud);
+        }
+    }
+    lru_cache_close(&t->lru);
+
+    free(t->buffered);
+
+    fb = t->fallbacks;
+    while (*fb) {
+        free(*fb++);
+    }
+
+#ifdef _WIN32
+    if (!FlushViewOfFile(t->header, 0)) {
+        Wwarn("FlushViewOfFile");
+    }
+    UnmapViewOfFile(t->header);
+#else
+    if (msync(t->header, sizeof(DubTreeHeader), MS_SYNC) != 0) {
+        warn("msync");
+    }
+    munmap(t->header, sizeof(DubTreeHeader));
+#endif
+}
+
 
 int dubtree_sanity_check(DubTree *t)
 {
