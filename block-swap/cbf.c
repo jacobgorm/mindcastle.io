@@ -14,7 +14,7 @@ void cbf_init(CBF *cbf, int n)
 
     int bits;
     for (bits = 0; (1 << bits) < m; ++bits);
-    printf("m=%f, k=%f, M=%d bits=%d\n", m, k, 1 << bits, bits);
+    //printf("m=%f, k=%f, M=%d bits=%d\n", m, k, 1 << bits, bits);
 
     cbf->counters = calloc(1, 1 << bits);
     cbf->bits = bits;
