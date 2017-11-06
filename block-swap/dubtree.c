@@ -7,6 +7,7 @@
 #include "simpletree.h"
 #include "lz4.h"
 #include "hex.h"
+#include "rtc.h"
 #include <blake2.h>
 
 /* These must go last or they will mess with e.g. asprintf() */
@@ -332,6 +333,7 @@ static void CALLBACK read_complete_scatter(DWORD rc, DWORD got, OVERLAPPED *o)
 
 typedef struct {
     int refcount;
+    double t0;
     DubTree *t;
     char *url;
     CURL *chs[2];
@@ -1095,6 +1097,7 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
             curl_easy_setopt(hgs->chs[1], CURLOPT_RANGE, ranges);
             curl_multi_add_handle(cmh, hgs->chs[1]);
         } else {
+            fprintf(stderr, "%.2fMiB/s\n", (double) (hgs->chunk_id.size) / (1024.0 * 1024.0 * (rtc() - hgs->t0)));
             char procfn[32];
             sprintf(procfn, "/proc/self/fd/%d", hgs->fd);
             chunk_id_t chunk_id;
@@ -1125,6 +1128,7 @@ static dubtree_handle_t prepare_http_get(DubTree *t, const chunk_id_t chunk_id,
         err(1, "unable to create tmp file\n");
     }
     HttpGetState *hgs = hgs_ref(calloc(1, sizeof(*hgs)));
+    hgs->t0 = rtc();
     hgs->chunk_id = chunk_id;
     hgs->t = t;
     hgs->url = strdup(url);
