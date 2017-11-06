@@ -255,6 +255,5 @@ int main(int argc, char **argv)
     dump_swapstat();
     swap_close(&bs);
     aio_close();
-    exit(1);
     return 0;
 }
