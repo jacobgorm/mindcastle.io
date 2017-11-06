@@ -39,6 +39,8 @@
 extern CURLM *cmh;
 
 static int populate_cbf(DubTree *t, int n);
+static dubtree_handle_t prepare_http_get(DubTree *t,
+        int synchronous, const char *url, int size);
 
 typedef struct {
     dubtree_handle_t f;
@@ -137,7 +139,11 @@ int dubtree_init(DubTree *t, char **fallbacks,
             asprintf(&fn, "%s/%s", *fb++, DUBTREE_MMAPPED_NAME);
             assert(fn);
             printf("attempt to open fallback %s\n", fn);
-            f = dubtree_open_existing_readonly(fn);
+            if (!memcmp("http://", fn, 7) || !memcmp("https://", fn, 8)) {
+                f = prepare_http_get(t, 1, fn, sizeof(*(t->header)));
+            } else {
+                f = dubtree_open_existing_readonly(fn);
+            }
             free(fn);
         }
 
@@ -338,7 +344,7 @@ typedef struct {
     char *url;
     CURL *chs[2];
     int active;
-    chunk_id_t chunk_id;
+    int size;
     int fd;
     uint32_t split;
     uint32_t offset;
@@ -399,7 +405,7 @@ static int execute_reads(DubTree *t,
             if (!hgs->active) {
                 CURL *ch = hgs->chs[0];
                 char ranges[32];
-                sprintf(ranges, "%u-%u", first->src_offset, hgs->chunk_id.size - 1);
+                sprintf(ranges, "%u-%u", first->src_offset, hgs->size - 1);
                 curl_easy_setopt(ch, CURLOPT_RANGE, ranges);
                 curl_multi_add_handle(cmh, ch);
                 hgs->active = 1;
@@ -1088,7 +1094,7 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
         }
     }
 
-    if ((hgs->offset == hgs->chunk_id.size) || (hgs->offset == hgs->split)) {
+    if ((hgs->offset == hgs->size) || (hgs->offset == hgs->split)) {
         if (hgs->split > 0 && hgs->offset > hgs->split) {
             hgs = hgs_ref(hgs);
             hgs->offset = 0;
@@ -1097,12 +1103,12 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
             curl_easy_setopt(hgs->chs[1], CURLOPT_RANGE, ranges);
             curl_multi_add_handle(cmh, hgs->chs[1]);
         } else {
-            fprintf(stderr, "%.2fMiB/s\n", (double) (hgs->chunk_id.size) / (1024.0 * 1024.0 * (rtc() - hgs->t0)));
+            fprintf(stderr, "%.2fMiB/s\n", (double) (hgs->size) / (1024.0 * 1024.0 * (rtc() - hgs->t0)));
             char procfn[32];
             sprintf(procfn, "/proc/self/fd/%d", hgs->fd);
             chunk_id_t chunk_id;
-            strong_hash(&chunk_id, hgs->buffer, hgs->chunk_id.size);
-            assert(equal_chunk_ids(&chunk_id, &hgs->chunk_id));
+            strong_hash(&chunk_id, hgs->buffer, hgs->size);
+            //assert(equal_chunk_ids(&chunk_id, &hgs->chunk_id));
             char *fn = name_chunk(t->fallbacks[0], chunk_id);
             int r = linkat(AT_FDCWD, procfn, AT_FDCWD, fn, AT_SYMLINK_FOLLOW);
             close(hgs->fd);
@@ -1112,15 +1118,15 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
             free(fn);
             void *b = hgs->buffer;
             hgs->buffer = NULL;
-            unmap_file(b, hgs->chunk_id.size);
+            unmap_file(b, hgs->size);
         }
         hgs_deref(hgs);
     }
     return size * nmemb;
 }
 
-static dubtree_handle_t prepare_http_get(DubTree *t, const chunk_id_t chunk_id,
-        int synchronous, const char *url)
+static dubtree_handle_t prepare_http_get(DubTree *t,
+        int synchronous, const char *url, int size)
 {
     //printf("fetching %s ...\n", url);
     dubtree_handle_t f = dubtree_open_tmp(t->fallbacks[0]);
@@ -1129,11 +1135,11 @@ static dubtree_handle_t prepare_http_get(DubTree *t, const chunk_id_t chunk_id,
     }
     HttpGetState *hgs = hgs_ref(calloc(1, sizeof(*hgs)));
     hgs->t0 = rtc();
-    hgs->chunk_id = chunk_id;
+    hgs->size = size;
     hgs->t = t;
     hgs->url = strdup(url);
-    dubtree_set_file_size(f, chunk_id.size);
-    hgs->buffer = map_file(f, chunk_id.size, 1);
+    dubtree_set_file_size(f, size);
+    hgs->buffer = map_file(f, size, 1);
     hgs->fd = dup(f->fd);
 
     int n;
@@ -1161,6 +1167,9 @@ static dubtree_handle_t prepare_http_get(DubTree *t, const chunk_id_t chunk_id,
     }
 
     f->opaque = hgs_ref(hgs);
+    if (synchronous) {
+        curl_easy_perform(hgs->chs[0]);
+    }
     return f;
 }
 
@@ -1188,11 +1197,7 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
                     dubtree_open_existing(fn);
             } else {
                 if (!memcmp("http://", fn, 7) || !memcmp("https://", fn, 8)) {
-                    f = prepare_http_get(t, chunk_id, local, fn);
-                    if (local) {
-                        HttpGetState *hgs = f->opaque;
-                        curl_easy_perform(hgs->chs[0]);
-                    }
+                    f = prepare_http_get(t, local, fn, chunk_id.size);
                 } else {
                     f = dubtree_open_existing_readonly(fn);
                 }

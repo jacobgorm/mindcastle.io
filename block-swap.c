@@ -1154,7 +1154,9 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
     for (i = 1; i < s->num_fallbacks; ++i) {
         const char *fb = s->fallbacks[i];
         debug_printf("swap: fallback %d %s\n", i, fb);
-        if (!file_exists(fb)) {
+        if (!file_exists(fb) &&
+                memcmp("http://", fb, 7) &&
+                memcmp("https://", fb, 8)) {
             warn("swap: fallback %s does not exist!", fb);
         }
     }
