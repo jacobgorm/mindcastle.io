@@ -181,13 +181,12 @@ int main(int argc, char **argv)
     ioh_init();
     aio_init();
 
-    if (!file_exists(fn)) {
-        swap_create(fn, 100 << 20, 0);
-    }
-    swap_open(&bs, fn, 0);
-
     int sp[2];
+    int sp2[2];
     r = socketpair(AF_UNIX, SOCK_STREAM, 0, sp);
+    assert(r == 0);
+
+    r = socketpair(AF_UNIX, SOCK_STREAM, 0, sp2);
     assert(r == 0);
 
     int device = open("/dev/nbd0", O_RDWR);
@@ -202,12 +201,16 @@ int main(int argc, char **argv)
     r = ioctl(device, NBD_CLEAR_SOCK);
     assert(r == 0);
 
+    int ok = 0;
     if (!fork()) {
         close(sp[0]);
         if(ioctl(device, NBD_SET_SOCK, sp[1]) == -1){
             fprintf(stderr, "NBD_SET_SOCK failed %s\n", strerror(errno));
-        }
-        else {
+            ok = 0;
+            r = write(sp2[1], &ok, sizeof(ok));
+        } else {
+            ok = 1;
+            r = write(sp2[1], &ok, sizeof(ok));
             r = ioctl(device, NBD_DO_IT);
             fprintf(stderr, "nbd device terminated %d\n", r);
             if (r == -1)
@@ -218,6 +221,18 @@ int main(int argc, char **argv)
         exit(0);
     }
 
+    r = read(sp2[0], &ok, sizeof(ok));
+    assert(r == sizeof(ok));
+
+    if (!ok) {
+        fprintf(stderr, "failed to init nbd, exiting!\n");
+        exit(1);
+    }
+
+    if (!file_exists(fn)) {
+        swap_create(fn, 100 << 20, 0);
+    }
+    swap_open(&bs, fn, 0);
 
     struct client_info *ci = malloc(sizeof(struct client_info));
     ci->sock = sp[0];
