@@ -279,6 +279,7 @@ typedef struct BDRVSwapState {
     char *swapdata;
     int num_fallbacks;
     char *fallbacks[DUBTREE_MAX_FALLBACKS + 1];
+    char *cache;
     /* Where the CoW kernel module places files. */
     char *cow_backup;
     uuid_t uuid;
@@ -854,6 +855,8 @@ static int swap_read_header(BDRVSwapState *s)
             }
         } else if (!strncmp(line, "fallback=", 9)) {
             s->fallbacks[s->num_fallbacks++] = strdup(line + 9);
+        } else if (!strncmp(line, "cache=", 6)) {
+            s->cache = strdup(line + 6);
         }
     }
 
@@ -1161,7 +1164,7 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
         }
     }
 
-    if (dubtree_init(&s->t, s->fallbacks, swap_malloc, swap_free, s) != 0) {
+    if (dubtree_init(&s->t, s->fallbacks, s->cache, swap_malloc, swap_free, s) != 0) {
         warn("swap: failed to init dubtree");
         r = -1;
         goto out;

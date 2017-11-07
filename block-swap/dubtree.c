@@ -47,7 +47,7 @@ typedef struct {
     chunk_id_t chunk_id;
 } CacheLineUserData;
 
-int dubtree_init(DubTree *t, char **fallbacks,
+int dubtree_init(DubTree *t, char **fallbacks, char *cache,
         malloc_callback malloc_cb, free_callback free_cb,
         void *opaque)
 {
@@ -79,17 +79,32 @@ int dubtree_init(DubTree *t, char **fallbacks,
     critical_section_leave(&t->cache_lock);
 
     fb = t->fallbacks;
-    while (*fallbacks) {
-        if (!(*fb = dubtree_realpath(*fallbacks))) {
-            *fb = strdup(*fallbacks);
+    for (i = 0; i < sizeof(t->fallbacks) / sizeof(t->fallbacks[0]); ++i) {
+        char *in;
+        if (cache && i == 1) {
+            in = cache;
+            dubtree_mkdir(cache);
+            t->cache = dubtree_realpath(cache);
+        } else {
+            in = *fallbacks++;
         }
+        if (!in) {
+            break;
+        }
+        if (!(*fb = dubtree_realpath(in))) {
+            *fb = strdup(in);
+        }
+        printf("fb %s\n", *fb);
         ++fb;
-        ++fallbacks;
     }
     *fb = NULL;
 
     fn = t->fallbacks[0];
     dubtree_mkdir(fn);
+
+    if (!t->cache) {
+        t->cache = fn;
+    }
 
     char *mn;
     void *m;
@@ -1109,10 +1124,10 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
             chunk_id_t chunk_id;
             strong_hash(&chunk_id, hgs->buffer, hgs->size);
             //assert(equal_chunk_ids(&chunk_id, &hgs->chunk_id));
-            char *fn = name_chunk(t->fallbacks[0], chunk_id);
+            char *fn = name_chunk(t->cache, chunk_id);
             int r = linkat(AT_FDCWD, procfn, AT_FDCWD, fn, AT_SYMLINK_FOLLOW);
             close(hgs->fd);
-            if (r < 0) {
+            if (r < 0 && errno != EEXIST) {
                 err(1, "linkat failed for %d -> %s", hgs->fd, fn);
             }
             free(fn);
@@ -1129,7 +1144,7 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
         int synchronous, const char *url, int size)
 {
     //printf("fetching %s ...\n", url);
-    dubtree_handle_t f = dubtree_open_tmp(t->fallbacks[0]);
+    dubtree_handle_t f = dubtree_open_tmp(t->cache);
     if (invalid_handle(f)) {
         err(1, "unable to create tmp file\n");
     }

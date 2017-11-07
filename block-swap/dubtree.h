@@ -60,6 +60,7 @@ typedef struct DubTree {
     /*volatile*/ chunk_id_t *levels;
 
     char *fallbacks[DUBTREE_MAX_FALLBACKS + 1];
+    char *cache;
     critical_section cache_lock;
     HashTable ht;
     LruCache lru;
@@ -82,8 +83,8 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
         uint8_t *out, uint8_t *map, uint32_t *sizes,
         read_callback cb, void *opaque, void *ctx);
 
-int dubtree_init(DubTree *t, char **fallbacks, malloc_callback malloc_cb,
-    free_callback free_cb, void *opaque);
+int dubtree_init(DubTree *t, char **fallbacks, char *cache,
+        malloc_callback malloc_cb, free_callback free_cb, void *opaque);
 void dubtree_close(DubTree *t);
 int dubtree_delete(DubTree *t);
 void dubtree_quiesce(DubTree *t);
