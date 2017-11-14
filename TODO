@@ -1,0 +1,8 @@
+delete chunks under cache/
+ability to save named checkpoint, via command channel?
+
+find a way to shorten filename hashes (base64-url?)
+figure out why small io_sz patch broke things
+investigate writing back reads to place hot data on top of tree
+
+stop or pause downloads when chunks are not longer in the top-N most needed
