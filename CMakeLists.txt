@@ -11,9 +11,8 @@ include_directories(
     "${CMAKE_SOURCE_DIR}"
 )
 
-add_executable(oneroot
+add_library(swap
     block-swap.c
-    nbd.c
     aio.c
     ioh.c
     block-swap/dubtree.c
@@ -22,4 +21,8 @@ add_executable(oneroot
     block-swap/cbf.c
     )
 
-target_link_libraries(oneroot -lb2 -lpthread -llz4 -luuid -lcurl)
+add_executable(oneroot
+    nbd.c
+    )
+
+target_link_libraries(oneroot swap -lb2 -lpthread -llz4 -luuid -lcurl)
