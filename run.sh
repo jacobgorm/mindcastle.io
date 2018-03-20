@@ -10,4 +10,4 @@ su -c 'rmmod nbd && modprobe nbd' || exit 1
 echo cleanup state
 su -c 'rm -rf cache/* swapdata-*'
 
-su -c './build/oneroot foo.swap'
+su -c './build/oneroot arch.swap'

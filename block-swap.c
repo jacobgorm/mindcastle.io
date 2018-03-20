@@ -1215,6 +1215,11 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
 
     s->quit = 0;
     s->flush = 0;
+#if 0
+    printf("checking...\n");
+    assert(dubtree_sanity_check(&s->t) == 0);
+    printf("checking done\n");
+#endif
 
     critical_section_init(&s->mutex); /* big lock. */
     critical_section_init(&s->shallow_mutex); /* protects shallow cache. */
@@ -1746,10 +1751,6 @@ next:
     critical_section_leave(&s->shallow_mutex);
     return 0;
 }
-static void aio_release(SwapAIOCB *acb)
-{
-    free(acb);
-}
 
 static inline void swap_common_cb(SwapAIOCB *acb)
 {
@@ -1769,7 +1770,7 @@ static inline void swap_common_cb(SwapAIOCB *acb)
     }
     //aio_del_wait_object(&acb->event);
     free(acb->sizes);
-    aio_release(acb);
+    free(acb);
 }
 
 #if 0
@@ -1863,7 +1864,6 @@ static SwapAIOCB *swap_aio_get(BlockDriverState *bs,
     acb = calloc(1, sizeof(*acb));
     acb->common.cb = cb;
     acb->common.opaque = opaque;
-    ioh_event_init(&acb->event);
     acb->bs = bs;
     acb->result = -1;
     acb->map = NULL;
@@ -2164,7 +2164,7 @@ BlockDriverAIOCB *swap_aio_read(BlockDriverState *bs,
         acb->buffer = buf;
         acb->tmp = tmp;
         acb->map = map;
-        ioh_event_set_callback(&acb->event, swap_read_cb, acb);
+        ioh_event_init(&acb->event, swap_read_cb, acb);
 
         __swap_queue_read_acb(bs, acb);
         swap_unlock(s);
@@ -2315,20 +2315,22 @@ static int __swap_nonblocking_write(BDRVSwapState *s, const uint8_t *buf,
             errx(1, "swap: OOM on line %d", __LINE__);
         }
 
-        ioh_event_set_callback(&acb->event, swap_rmw_cb, acb);
-
         swap_lock(s);
         found = __swap_nonblocking_read(s, acb->tmp ? acb->tmp : acb->buffer,
                                         acb->block, acb->size, &acb->map);
         if (found < 0) {
+            fprintf(stderr, "no event\n");
             free(acb->tmp);
-            aio_release(acb);
+            free(acb);
             acb = NULL;
         } else if (found == acb->size) {
-            printf("found all\n");
-            ioh_event_set(&acb->event);
+            fprintf(stderr, "found all\n");
+            swap_rmw_cb(acb);
+            acb = NULL;
+            //ioh_event_set(&acb->event);
         } else {
-            printf("queuing read\n");
+            fprintf(stderr, "queuing read\n");
+            ioh_event_init(&acb->event, swap_rmw_cb, acb);
             __swap_queue_read_acb(bs, acb);
         }
         swap_unlock(s);
@@ -2361,7 +2363,7 @@ static int __swap_nonblocking_write(BDRVSwapState *s, const uint8_t *buf,
                 return NULL;
             }
 
-            ioh_event_set_callback(&acb->event, swap_write_cb, acb);
+            ioh_event_init(&acb->event, swap_write_cb, acb);
             acb->ratelimit_complete_timer = new_timer_ms(
                     rt_clock, swap_ratelimit_complete_timer_notify, acb);
             mod_timer(acb->ratelimit_complete_timer,

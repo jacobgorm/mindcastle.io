@@ -155,14 +155,18 @@ int dubtree_init(DubTree *t, char **fallbacks, char *cache,
             assert(fn);
             printf("attempt to open fallback %s\n", fn);
             if (!memcmp("http://", fn, 7) || !memcmp("https://", fn, 8)) {
+                printf("fetch %s\n", fn);
                 f = prepare_http_get(t, 1, fn, sizeof(*(t->header)));
             } else {
+                printf("open RO %s\n", fn);
                 f = dubtree_open_existing_readonly(fn);
             }
             free(fn);
+            fn = NULL;
         }
 
         if (valid_handle(f)) {
+            printf("reading from %s %d:%p\n", fn, f->fd, f->opaque);
             dubtree_pread(f, t->header, sizeof(*(t->header)), 0);
             dubtree_close_file(f);
         }
@@ -194,6 +198,7 @@ int dubtree_init(DubTree *t, char **fallbacks, char *cache,
         return 0;
     } else {
         printf("mismatched dubtree header!\n");
+        assert(0);
         return -1;
     }
 }
@@ -352,24 +357,25 @@ static void CALLBACK read_complete_scatter(DWORD rc, DWORD got, OVERLAPPED *o)
 }
 #endif
 
+#define MAX_BLOCKED_READS 256
+
 typedef struct {
     int refcount;
     double t0;
     DubTree *t;
     char *url;
-    CURL *chs[2];
-    int active;
+    CURL *ch;
     int size;
     int fd;
-    uint32_t split;
     uint32_t offset;
     uint8_t *buffer; // XXX mmap this
     int num_blocked;
+    int num_unblocked;
     struct {
         CallbackState *cs;
         uint8_t *dst;
         Read *first;
-        int n; } blocked_reads[256];
+        int n; } blocked_reads[MAX_BLOCKED_READS];
 } HttpGetState;
 
 static inline HttpGetState *hgs_ref(HttpGetState *hgs) {
@@ -386,17 +392,8 @@ static inline void hgs_deref(HttpGetState *hgs) {
 
 static inline int reads_inside_buffer(const HttpGetState *hgs, const Read *first, int n)
 {
-    uint32_t begin = first->src_offset;
     uint32_t end = first[n - 1].src_offset + first[n - 1].size;
-    if (hgs->offset > hgs->split) { // right side fetch
-        //printf("case 0 %x->%x? inside [%x;%x]\n", begin, end, hgs->split, hgs->offset);
-        return hgs->split <= begin && end <= hgs->offset;
-    } else if (hgs->offset < hgs->split) { // left side fetch
-        //printf("case 1 %x->%x? inside [0;%x] or [%x;%x]\n", begin, end, hgs->offset, hgs->split, hgs->chunk_id.size);
-        return end <= hgs->offset || begin >= hgs->split;
-    } else {
-        return 1;
-    }
+    return end <= hgs->offset;
 }
 
 static int execute_reads(DubTree *t,
@@ -410,24 +407,15 @@ static int execute_reads(DubTree *t,
 
     HttpGetState *hgs = f->opaque;
     if (hgs && hgs->buffer) {
-        if (hgs->active && reads_inside_buffer(hgs, first, n)) {
+        if (reads_inside_buffer(hgs, first, n)) {
             // XXX this calls for two heaps
             for (i = 0, rd = first; i < n; ++i, ++rd) {
                 memcpy(dst + rd->dst_offset, hgs->buffer + rd->src_offset, rd->size);
             }
             free(first);
         } else {
-            if (!hgs->active) {
-                CURL *ch = hgs->chs[0];
-                char ranges[32];
-                sprintf(ranges, "%u-%u", first->src_offset, hgs->size - 1);
-                curl_easy_setopt(ch, CURLOPT_RANGE, ranges);
-                curl_multi_add_handle(cmh, ch);
-                hgs->active = 1;
-                hgs->split = hgs->offset = first->src_offset;
-            }
             increment_counter(cs);
-            assert(hgs->num_blocked < 256); //XXX
+            assert(hgs->num_blocked < MAX_BLOCKED_READS); //XXX
             hgs->blocked_reads[hgs->num_blocked].cs = cs;
             hgs->blocked_reads[hgs->num_blocked].dst = dst;
             hgs->blocked_reads[hgs->num_blocked].first = first;
@@ -1104,37 +1092,29 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
                 }
                 hgs->blocked_reads[i].first = NULL;
                 decrement_counter(hgs->blocked_reads[i].cs);
+                ++(hgs->num_unblocked);
                 free(first);
             }
         }
     }
 
-    if ((hgs->offset == hgs->size) || (hgs->offset == hgs->split)) {
-        if (hgs->split > 0 && hgs->offset > hgs->split) {
-            hgs = hgs_ref(hgs);
-            hgs->offset = 0;
-            char ranges[32];
-            sprintf(ranges, "0-%u", hgs->split - 1);
-            curl_easy_setopt(hgs->chs[1], CURLOPT_RANGE, ranges);
-            curl_multi_add_handle(cmh, hgs->chs[1]);
-        } else {
-            fprintf(stderr, "%.2fMiB/s\n", (double) (hgs->size) / (1024.0 * 1024.0 * (rtc() - hgs->t0)));
-            char procfn[32];
-            sprintf(procfn, "/proc/self/fd/%d", hgs->fd);
-            chunk_id_t chunk_id;
-            strong_hash(&chunk_id, hgs->buffer, hgs->size);
-            //assert(equal_chunk_ids(&chunk_id, &hgs->chunk_id));
-            char *fn = name_chunk(t->cache, chunk_id);
-            int r = linkat(AT_FDCWD, procfn, AT_FDCWD, fn, AT_SYMLINK_FOLLOW);
-            close(hgs->fd);
-            if (r < 0 && errno != EEXIST) {
-                err(1, "linkat failed for %d -> %s", hgs->fd, fn);
-            }
-            free(fn);
-            void *b = hgs->buffer;
-            hgs->buffer = NULL;
-            unmap_file(b, hgs->size);
+    if ((hgs->offset == hgs->size)) {
+        fprintf(stderr, "%p %.2fMiB/s\n", hgs, (double) (hgs->size) / (1024.0 * 1024.0 * (rtc() - hgs->t0)));
+        char procfn[32];
+        sprintf(procfn, "/proc/self/fd/%d", hgs->fd);
+        chunk_id_t chunk_id;
+        strong_hash(&chunk_id, hgs->buffer, hgs->size);
+        //assert(equal_chunk_ids(&chunk_id, &hgs->chunk_id));
+        char *fn = name_chunk(t->cache, chunk_id);
+        int r = linkat(AT_FDCWD, procfn, AT_FDCWD, fn, AT_SYMLINK_FOLLOW);
+        close(hgs->fd);
+        if (r < 0 && errno != EEXIST) {
+            err(1, "linkat failed for %d -> %s", hgs->fd, fn);
         }
+        free(fn);
+        void *b = hgs->buffer;
+        hgs->buffer = NULL;
+        unmap_file(b, hgs->size);
         hgs_deref(hgs);
     }
     return size * nmemb;
@@ -1143,12 +1123,12 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
 static dubtree_handle_t prepare_http_get(DubTree *t,
         int synchronous, const char *url, int size)
 {
-    //printf("fetching %s ...\n", url);
     dubtree_handle_t f = dubtree_open_tmp(t->cache);
     if (invalid_handle(f)) {
         err(1, "unable to create tmp file\n");
     }
     HttpGetState *hgs = hgs_ref(calloc(1, sizeof(*hgs)));
+    fprintf(stderr, "%p fetching %s s=%d...\n", hgs, url, synchronous);
     hgs->t0 = rtc();
     hgs->size = size;
     hgs->t = t;
@@ -1157,33 +1137,27 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
     hgs->buffer = map_file(f, size, 1);
     hgs->fd = dup(f->fd);
 
-    int n;
     if (synchronous) {
-        n = 1;
         static CURL *shared_ch = NULL;
         if (!shared_ch) {
             shared_ch = curl_easy_init();
         }
-        hgs->chs[0] = shared_ch;
-        hgs->chs[1] = NULL;
+        hgs->ch = shared_ch;
     } else {
-        n = 2;
-        for (int i = 0; i < n; ++i) {
-            hgs->chs[i] = curl_easy_init();
-        }
+        hgs->ch = curl_easy_init();
     }
-    for (int i = 0; i < n; ++i) {
-        CURL *ch = hgs->chs[i];
-        curl_easy_setopt(ch, CURLOPT_URL, url);
-        curl_easy_setopt(ch, CURLOPT_BUFFERSIZE, CURL_MAX_READ_SIZE);
-        curl_easy_setopt(ch, CURLOPT_WRITEDATA, hgs);
-        curl_easy_setopt(ch, CURLOPT_SOCKOPTFUNCTION, curl_sockopt_cb);
-        curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, curl_data_cb2);
-    }
+    curl_easy_setopt(hgs->ch, CURLOPT_URL, url);
+    curl_easy_setopt(hgs->ch, CURLOPT_BUFFERSIZE, CURL_MAX_READ_SIZE);
+    curl_easy_setopt(hgs->ch, CURLOPT_WRITEDATA, hgs);
+    curl_easy_setopt(hgs->ch, CURLOPT_SOCKOPTFUNCTION, curl_sockopt_cb);
+    curl_easy_setopt(hgs->ch, CURLOPT_WRITEFUNCTION, curl_data_cb2);
 
     f->opaque = hgs_ref(hgs);
     if (synchronous) {
-        curl_easy_perform(hgs->chs[0]);
+        curl_easy_perform(hgs->ch);
+    } else {
+        CURLMcode r = curl_multi_add_handle(cmh, hgs->ch);
+        assert(!r);
     }
     return f;
 }

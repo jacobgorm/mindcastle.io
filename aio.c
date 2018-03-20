@@ -83,8 +83,19 @@ int aio_wait(void)
         }
     } while (num_msgs);
 
-    if (curl_multi_fdset(cmh, &readset, &writeset, &errset, &max) != CURLM_OK) {
-        printf("curl_multi_fdset failed!\n");
+    CURLMcode cr;
+    cr = curl_multi_fdset(cmh, &readset, &writeset, &errset, &max);
+    if (cr != CURLM_OK) {
+        printf("curl_multi_fdset failed with %s!\n", curl_multi_strerror(cr));
+        assert(0);
+    }
+
+    curl_multi_timeout(cmh, &curl_timeout);
+    if (curl_timeout < 0) {
+        curl_timeout = 1000;
+    }
+    if (max == -1) {
+        curl_timeout = 1000; /// XXX curl says 10
     }
 
     max = max > ioh_fd() ? max : ioh_fd();
@@ -98,39 +109,27 @@ int aio_wait(void)
         }
     }
 
-    curl_multi_timeout(cmh, &curl_timeout);
-    if(curl_timeout >= 0) {
-        tv.tv_sec = curl_timeout / 1000;
-        if(tv.tv_sec > 1) {
-            tv.tv_sec = 1;
-        } else {
-            tv.tv_usec = (curl_timeout % 1000) * 1000;
-        }
-    } else {
-        tv.tv_sec = 5;
-        tv.tv_usec = 0;
-    }
+
+    /* convert to struct usable by select */
+    tv.tv_sec = curl_timeout / 1000;
+    tv.tv_usec = (curl_timeout % 1000) * 1000;
+    //fprintf(stderr, "wait %ld %ld\n", tv.tv_sec, tv.tv_usec);
 
     int r = select(max + 1, &readset, &writeset, &errset, &tv);
     if (r > 0) {
         if (FD_ISSET(ioh_fd(), &readset)) {
             for (;;) {
-                ioh_event *event;
-                int r = read(ioh_fd(), &event, sizeof(event));
-                if (r < 0 && errno == EWOULDBLOCK) {
-                    break;
+                char byte;
+                int r2 = read(ioh_fd(), &byte, sizeof(byte));
+                if (r2 != sizeof(byte)) {
+                    if (errno == EWOULDBLOCK) {
+                        break;
+                    } else {
+                        printf("r=%d\n", r2);
+                        assert(0);
+                    }
                 }
-                if (r != sizeof(event)) {
-                    assert(0);
-                }
-                ioh_event_reset(event);
-                if (event->cb) {
-                    void (*cb) (void *opaque) = event->cb;
-                    void *opaque = event->opaque;
-                    event->cb = NULL;
-                    event->opaque = NULL;
-                    cb(opaque);
-                }
+                ioh_event_service_callbacks();
             }
         }
         for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {

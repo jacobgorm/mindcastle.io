@@ -148,6 +148,7 @@ static inline void dubtree_close_file(dubtree_handle_t f)
 static inline
 int dubtree_pread(dubtree_handle_t f, void *buf, size_t sz, uint64_t offset)
 {
+    printf("%s @ %lu fd=%d\n", __FUNCTION__, offset, f->fd);
 #ifdef _WIN32
     OVERLAPPED o = {};
     DWORD got = 0;
