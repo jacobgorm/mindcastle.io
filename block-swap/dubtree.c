@@ -1,6 +1,7 @@
 #include "dubtree_sys.h"
 #include "dubtree_io.h"
 
+#include "aio.h"
 #include "cbf.h"
 #include "dubtree.h"
 #include "lrucache.h"
@@ -35,8 +36,6 @@
 #ifndef CURL_MAX_READ_SIZE
 #define CURL_MAX_READ_SIZE (1<<19)
 #endif
-
-extern CURLM *cmh;
 
 static int populate_cbf(DubTree *t, int n);
 static dubtree_handle_t prepare_http_get(DubTree *t,
@@ -1158,7 +1157,7 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
     if (synchronous) {
         curl_easy_perform(hgs->ch);
     } else {
-        CURLMcode r = curl_multi_add_handle(cmh, hgs->ch);
+        int r = swap_aio_add_curl_handle(hgs->ch);
         if (r) {
             errx(1, "failed to add curl handle");
         }

@@ -22,8 +22,9 @@ typedef struct AioEntry {
 
 static AioEntry aios[1024];
 
-void aio_init(void)
+void swap_aio_init(void)
 {
+    ioh_init();
     for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
         AioEntry *e = &aios[i];
         memset(e, 0, sizeof(*e));
@@ -33,12 +34,12 @@ void aio_init(void)
     cmh = curl_multi_init();
 }
 
-void aio_close(void)
+void swap_aio_close(void)
 {
     curl_multi_cleanup(cmh);
 }
 
-void aio_add_wait_object(int fd, void (*cb) (void *opaque), void *opaque) {
+void swap_aio_add_wait_object(int fd, void (*cb) (void *opaque), void *opaque) {
     for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
         AioEntry *e = &aios[i];
         if (e->fd == -1 && __sync_bool_compare_and_swap(&e->fd, -1, fd)) {
@@ -50,10 +51,17 @@ void aio_add_wait_object(int fd, void (*cb) (void *opaque), void *opaque) {
     assert(0);
 }
 
+int swap_aio_add_curl_handle(CURL *ch) {
+    assert(cmh);
+    return (int) curl_multi_add_handle(cmh, ch);
+}
+
 extern void dump_swapstat(void);
 
-int aio_wait(void)
+int swap_aio_wait(void)
 {
+    assert(cmh);
+
     int max = -1;
     fd_set readset, writeset, errset;
     FD_ZERO(&readset);

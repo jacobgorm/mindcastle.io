@@ -2406,7 +2406,7 @@ int swap_flush(BlockDriverState *bs)
         TAILQ_FOREACH_SAFE(acb, &s->rlimit_write_queue, rlimit_write_entry,
                            next)
             swap_complete_write_acb(acb);
-        aio_wait();
+        swap_aio_wait();
     }
     //aio_wait_end();
 #endif

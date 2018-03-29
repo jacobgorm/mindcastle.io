@@ -60,7 +60,7 @@ static void nbd_read_done(void *opaque, int ret) {
     free(ri->buffer);
     free(ri);
 
-    aio_add_wait_object(ci->sock, got_data, ci);
+    swap_aio_add_wait_object(ci->sock, got_data, ci);
 }
 
 static void nbd_write_done(void *opaque, int ret) {
@@ -130,7 +130,7 @@ static void got_data(void *opaque)
                     }
                 }
                 swap_aio_write(ci->bs, offset / 512, buffer, len / 512, nbd_write_done, buffer);
-                aio_add_wait_object(ci->sock, got_data, ci);
+                swap_aio_add_wait_object(ci->sock, got_data, ci);
 
                 break;
             }
@@ -141,7 +141,7 @@ static void got_data(void *opaque)
                 if (r != sizeof(reply)) {
                     err(1, "sock write (d) failed");
                 }
-                aio_add_wait_object(ci->sock, got_data, ci);
+                swap_aio_add_wait_object(ci->sock, got_data, ci);
                 break;
             }
         };
@@ -189,7 +189,7 @@ int main(int argc, char **argv)
     }
 
     ioh_init();
-    aio_init();
+    swap_aio_init();
 
     int sp[2];
     int sp2[2];
@@ -261,7 +261,7 @@ int main(int argc, char **argv)
     struct client_info *ci = malloc(sizeof(struct client_info));
     ci->sock = sp[0];
     ci->bs = &bs;
-    aio_add_wait_object(ci->sock, got_data, ci);
+    swap_aio_add_wait_object(ci->sock, got_data, ci);
 
 
 #if 0
@@ -296,7 +296,7 @@ int main(int argc, char **argv)
     //uint8_t buf[8 * 512] = {1,};
     //swap_aio_write(&bs, 1, buf, 8, write_done, NULL);
     while (!should_exit) {
-        if (aio_wait() == 1 || should_flush) {
+        if (swap_aio_wait() == 1 || should_flush) {
             swap_flush(&bs);
             should_flush = 0;
         }
@@ -304,6 +304,6 @@ int main(int argc, char **argv)
     swap_flush(&bs);
     dump_swapstat();
     swap_close(&bs);
-    aio_close();
+    swap_aio_close();
     return 0;
 }
