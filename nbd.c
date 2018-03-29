@@ -48,10 +48,14 @@ static void nbd_read_done(void *opaque, int ret) {
     struct client_info *ci = ri->ci;
 
     r = write(ci->sock, &ri->reply, sizeof(ri->reply));
-    assert(r == sizeof(ri->reply));
+    if (r != sizeof(ri->reply)) {
+        err(1, "sock write (a) failed");
+    }
 
     r = write(ci->sock, ri->buffer, ri->len);
-    assert(r == ri->len);
+    if (r != ri->len) {
+        err(1, "sock write (b) failed");
+    }
 
     free(ri->buffer);
     free(ri);
@@ -83,7 +87,9 @@ static void got_data(void *opaque)
                 printf("got flush\n");
                 swap_flush(ci->bs);
                 r = write(ci->sock, &reply, sizeof(reply));
-                assert(r == sizeof(reply));
+                if (r != sizeof(reply)) {
+                    err(1, "sock write (c) failed");
+                }
                 break;
             }
 
@@ -119,7 +125,9 @@ static void got_data(void *opaque)
 
                 for (left = len, b = buffer; left > 0; b += r, left -= r)  {
                     r = read(ci->sock, b, left);
-                    assert(r >= 0);
+                    if (r < 0) {
+                        err(1, "sock read failed");
+                    }
                 }
                 swap_aio_write(ci->bs, offset / 512, buffer, len / 512, nbd_write_done, buffer);
                 aio_add_wait_object(ci->sock, got_data, ci);
@@ -130,7 +138,9 @@ static void got_data(void *opaque)
             default: {
                 printf("default %x\n", ntohl(request.type));
                 r = write(ci->sock, &reply, sizeof(reply));
-                assert(r == sizeof(reply));
+                if (r != sizeof(reply)) {
+                    err(1, "sock write (d) failed");
+                }
                 aio_add_wait_object(ci->sock, got_data, ci);
                 break;
             }
@@ -184,22 +194,34 @@ int main(int argc, char **argv)
     int sp[2];
     int sp2[2];
     r = socketpair(AF_UNIX, SOCK_STREAM, 0, sp);
-    assert(r == 0);
+    if (r) {
+        err(1, "socketpair (a) failed");
+    }
 
     r = socketpair(AF_UNIX, SOCK_STREAM, 0, sp2);
-    assert(r == 0);
+    if (r) {
+        err(1, "socketpair (b) failed");
+    }
 
     int device = open("/dev/nbd0", O_RDWR);
-    assert(device >= 0);
+    if (device < 0) {
+        err(1, "nbd device open failed");
+    }
 
     r = ioctl(device, NBD_SET_SIZE_BLOCKS, 1000 << 20);
-    assert(r == 0);
+    if (r) {
+        err(1, "device ioctl (a) failed");
+    }
 
     r = ioctl(device, NBD_SET_BLKSIZE, 0x1000);
-    assert(r == 0);
+    if (r) {
+        err(1, "device ioctl (b) failed");
+    }
 
     r = ioctl(device, NBD_CLEAR_SOCK);
-    assert(r == 0);
+    if (r) {
+        err(1, "device ioctl (c) failed");
+    }
 
     int ok = 0;
     if (!fork()) {
@@ -222,7 +244,9 @@ int main(int argc, char **argv)
     }
 
     r = read(sp2[0], &ok, sizeof(ok));
-    assert(r == sizeof(ok));
+    if (r != sizeof(ok)) {
+        err(1, "socket pair read failed");
+    }
 
     if (!ok) {
         fprintf(stderr, "failed to init nbd, exiting!\n");

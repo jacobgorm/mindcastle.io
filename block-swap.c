@@ -1957,7 +1957,9 @@ static void dubtree_read_complete_cb(void *opaque, int result)
 #endif
                 uint8_t *dst = (count < SWAP_SECTOR_SIZE) ? tmp : o;
                 r = swap_get_key(dst, t, sz);
-                assert(r >= 0);
+                if (r < 0) {
+                    errx(1, "block decompression failed");
+                }
 
                 if (dst == tmp) {
                     memcpy(o, tmp, count);

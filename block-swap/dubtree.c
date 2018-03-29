@@ -288,7 +288,9 @@ static void set_event_cb(void *opaque, int result)
         if (r != sizeof(msg)) {
             fprintf(stderr, "r=%d write err %s\n", r, strerror(errno));
         }
-        assert(r == sizeof(msg));
+        if (r != sizeof(msg)) {
+            err(1, "pipe read failed");
+        }
         close(fd);
     }
 #endif
@@ -1157,7 +1159,9 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
         curl_easy_perform(hgs->ch);
     } else {
         CURLMcode r = curl_multi_add_handle(cmh, hgs->ch);
-        assert(!r);
+        if (r) {
+            errx(1, "failed to add curl handle");
+        }
     }
     return f;
 }
@@ -1366,7 +1370,9 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
     }
     int fds[2];
     int r = pipe2(fds, O_DIRECT);
-    assert(r >= 0);
+    if (r < 0) {
+        errx(1, "pipe2 failed");
+    }
     cs->cb = set_event_cb;
     cs->opaque = (void *) (intptr_t) fds[1];
 #endif
@@ -1390,7 +1396,9 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
 #else
     char msg;
     r = read(fds[0], &msg, sizeof(msg));
-    assert(r == sizeof(msg) && msg == 1);
+    if (r != sizeof(msg)) {
+        err(1, "pipe read failed");
+    }
     close(fds[0]);
     strong_hash(&chunk_id, c->buf, size);
     dubtree_handle_t f = get_chunk(t, chunk_id, 1, 0, &l);
@@ -1906,7 +1914,9 @@ int dubtree_sanity_check(DubTree *t)
                     return -1;
                 }
                 got = dubtree_pread(cf, in, k.value.size, k.value.offset);
-                assert(got == k.value.size);
+                if (got != k.value.size) {
+                    err(1, "dubtree pread failed");
+                }
                 put_chunk(t, l);
 
                 int sz = k.value.size;
