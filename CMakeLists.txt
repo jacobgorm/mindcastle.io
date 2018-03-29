@@ -20,6 +20,9 @@ add_library(swap
     block-swap/simpletree.c
     block-swap/cbf.c
     )
+install(TARGETS swap
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib)
 
 add_executable(oneroot
     nbd.c
