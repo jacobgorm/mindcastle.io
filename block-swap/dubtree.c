@@ -370,8 +370,7 @@ typedef struct {
     int fd;
     uint32_t offset;
     uint8_t *buffer; // XXX mmap this
-    int num_blocked;
-    int num_unblocked;
+    volatile int num_blocked;
     struct {
         CallbackState *cs;
         uint8_t *dst;
@@ -416,12 +415,13 @@ static int execute_reads(DubTree *t,
             free(first);
         } else {
             increment_counter(cs);
-            assert(hgs->num_blocked < MAX_BLOCKED_READS); //XXX
-            hgs->blocked_reads[hgs->num_blocked].cs = cs;
-            hgs->blocked_reads[hgs->num_blocked].dst = dst;
-            hgs->blocked_reads[hgs->num_blocked].first = first;
-            hgs->blocked_reads[hgs->num_blocked].n = n;
-            ++(hgs->num_blocked);
+            int num_blocked = __sync_fetch_and_add(&hgs->num_blocked, 0);
+            assert(num_blocked < MAX_BLOCKED_READS); //XXX
+            hgs->blocked_reads[num_blocked].cs = cs;
+            hgs->blocked_reads[num_blocked].dst = dst;
+            hgs->blocked_reads[num_blocked].first = first;
+            hgs->blocked_reads[num_blocked].n = n;
+            __sync_fetch_and_add(&hgs->num_blocked, 1);
         }
         return 0;
     }
@@ -1081,7 +1081,7 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
     memcpy(hgs->buffer + hgs->offset, ptr, size * nmemb);
     hgs->offset += size * nmemb;
 
-    for (int i = 0; i < hgs->num_blocked; ++i) {
+    for (int i = 0; i < __sync_fetch_and_add(&hgs->num_blocked, 0); ++i) {
         Read *first = hgs->blocked_reads[i].first;
         if (first) {
             int n = hgs->blocked_reads[i].n;
@@ -1093,7 +1093,6 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
                 }
                 hgs->blocked_reads[i].first = NULL;
                 decrement_counter(hgs->blocked_reads[i].cs);
-                ++(hgs->num_unblocked);
                 free(first);
             }
         }
