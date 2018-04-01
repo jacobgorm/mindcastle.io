@@ -68,7 +68,7 @@ int dubtree_init(DubTree *t, char **fallbacks, char *cache,
 
     critical_section_enter(&t->cache_lock);
     hashtable_init(&t->ht, NULL, NULL);
-    const int log_cache_lines = 9;
+    const int log_cache_lines = 4;
     lru_cache_init(&t->lru, log_cache_lines);
     for (int i = 0; i < (1 << log_cache_lines); ++i) {
         CacheLineUserData *ud = calloc(1, sizeof(CacheLineUserData));
