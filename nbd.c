@@ -218,9 +218,14 @@ int main(int argc, char **argv)
         err(1, "device ioctl (b) failed");
     }
 
-    r = ioctl(device, NBD_CLEAR_SOCK);
+    r = ioctl(device, NBD_SET_TIMEOUT, 120);
     if (r) {
         err(1, "device ioctl (c) failed");
+    }
+
+    r = ioctl(device, NBD_CLEAR_SOCK);
+    if (r) {
+        err(1, "device ioctl (d) failed");
     }
 
     int ok = 0;
