@@ -20,12 +20,11 @@ add_library(swap SHARED
     block-swap/simpletree.c
     block-swap/cbf.c
     )
+
 install(TARGETS swap
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib)
 
-add_executable(oneroot
-    nbd.c
-    )
-
+add_executable(oneroot nbd.c)
 target_link_libraries(oneroot swap -lb2 -lpthread -llz4 -luuid -lcurl)
+install(TARGETS oneroot DESTINATION bin)
