@@ -1932,7 +1932,6 @@ static void swap_write_cb(void *opaque)
 static void dubtree_read_complete_cb(void *opaque, int result)
 {
     SwapAIOCB *acb = opaque;
-    BDRVSwapState *s = acb->bs->opaque;
     uint8_t *o = acb->tmp ? acb->tmp : acb->buffer;
     uint8_t *t = acb->decomp;
     int64_t count = acb->size;
@@ -1941,13 +1940,8 @@ static void dubtree_read_complete_cb(void *opaque, int result)
     uint64_t key = acb->block;
     int r = 0;
 
-    if (result < 0) {
-        printf("negative result\n");
-        return;
-    }
     if (result >= 0) {
 
-        swap_lock(s);
         while (count > 0) {
             size_t sz = *sizes++;
 
@@ -1964,7 +1958,6 @@ static void dubtree_read_complete_cb(void *opaque, int result)
                 if (dst == tmp) {
                     memcpy(o, tmp, count);
                 }
-                __swap_nonblocking_write(s, dst, key, SWAP_SECTOR_SIZE, 0);
                 t += sz;
             }
 
@@ -1972,7 +1965,9 @@ static void dubtree_read_complete_cb(void *opaque, int result)
             count -= SWAP_SECTOR_SIZE;
             ++key;
         }
-        swap_unlock(s);
+    } else {
+        debug_printf("%s: got negative result\n", __FUNCTION__);
+        return;
     }
 
 #ifdef SWAP_STATS
