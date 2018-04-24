@@ -544,7 +544,7 @@ static int flush_chunk(DubTree *t, uint8_t *dst, dubtree_handle_t f,
     return r;
 }
 
-static int flush_reads(DubTree *t, Chunk *c, const uint8_t *chunk0, CallbackState *cs)
+static int flush_reads(DubTree *t, Chunk *c, const uint8_t *chunk0, int local, CallbackState *cs)
 {
     int i, j;
     int r = 0;
@@ -566,7 +566,7 @@ static int flush_reads(DubTree *t, Chunk *c, const uint8_t *chunk0, CallbackStat
             dubtree_handle_t f;
             int l;
 
-            f = get_chunk(t, cr->chunk_id, 0, 0, &l);
+            f = get_chunk(t, cr->chunk_id, 0, local, &l);
             if (valid_handle(f)) {
                 r = flush_chunk(t, c->buf, f, cr, cs);
                 put_chunk(t, l);
@@ -902,7 +902,7 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
         dst += size;
     }
 
-    r = flush_reads(t, &c, NULL, cs);
+    r = flush_reads(t, &c, NULL, 0, cs);
     if (r < 0) {
         succeeded = 0;
     }
@@ -1375,7 +1375,7 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
     cs->opaque = (void *) (intptr_t) fds[1];
 #endif
 
-    flush_reads(t, c, chunk0, cs);
+    flush_reads(t, c, chunk0, 1, cs);
     decrement_counter(cs);
 
 #ifdef _WIN32
