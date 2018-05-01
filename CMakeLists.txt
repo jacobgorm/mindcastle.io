@@ -27,4 +27,8 @@ install(TARGETS swap
 
 add_executable(oneroot nbd.c)
 target_link_libraries(oneroot swap -lb2 -lpthread -llz4 -luuid -lcurl)
+
+add_executable(img-test img-test.c mt19937-64.c)
+target_link_libraries(img-test swap -lb2 -lpthread -llz4 -luuid -lcurl)
+
 install(TARGETS oneroot DESTINATION bin)

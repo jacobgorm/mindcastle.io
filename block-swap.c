@@ -2112,6 +2112,7 @@ BlockDriverAIOCB *swap_aio_read(BlockDriverState *bs,
         BlockDriverCompletionFunc *cb, void *opaque)
 {
     //debug_printf("%s %"PRIx64" %d\n", __FUNCTION__, sector_num, nb_sectors);
+    //fprintf(stderr, "%s %"PRIx64" %x\n", __FUNCTION__, sector_num, nb_sectors);
     BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
     SwapAIOCB *acb = NULL;
     const uint64_t mask = SWAP_SECTOR_SIZE - 1;
@@ -2280,7 +2281,7 @@ static int __swap_nonblocking_write(BDRVSwapState *s, const uint8_t *buf,
         int64_t sector_num, const uint8_t *buf, int nb_sectors,
         BlockDriverCompletionFunc *cb, void *opaque)
 {
-    //debug_printf("%s %"PRIu64" %d\n", __FUNCTION__, sector_num, nb_sectors);
+    //fprintf(stderr, "%s %"PRIx64" %x\n", __FUNCTION__, sector_num, nb_sectors);
     BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
     SwapAIOCB *acb = NULL;
 
