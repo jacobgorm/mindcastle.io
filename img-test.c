@@ -131,18 +131,22 @@ static inline void seq(uint64_t *s, uint32_t *l, int align)
 
 static int fds[2];
 
-static void read_done(void *opaque, int ret) {
+static void io_done(void *opaque, int ret) {
     char msg;
     int r = write(fds[1], &msg, sizeof(msg));
     assert(r == 1);
 }
 
-static void write_done(void *opaque, int ret) {
+static void wait(void) {
+    char msg;
+    int r = read(fds[0], &msg, sizeof(msg));
+    if (r != sizeof(msg)) {
+        err(1, "pipe read failed");
+    }
 }
 
 static void *disk_swap_thread(void *bs)
 {
-    swap_aio_init();
     for (;;) {
         swap_aio_wait();
     }
@@ -205,7 +209,8 @@ int main(int argc, char **argv)
             }
 
             r = 0;
-            swap_aio_write(&bs, sector, buf, len, write_done, NULL);
+            swap_aio_write(&bs, sector, buf, len, io_done, NULL);
+            wait();
             total_sectors += len;
 
 #if 0
@@ -234,12 +239,8 @@ int main(int argc, char **argv)
             rnd(&sector, &len, align);
 
             int r = 0;//bdrv_read(bs, sector, buf, len);
-            swap_aio_read(&bs, sector, buf, len, read_done, NULL);
-            char msg;
-            r = read(fds[0], &msg, sizeof(msg));
-            if (r != sizeof(msg)) {
-                err(1, "pipe read failed");
-            }
+            swap_aio_read(&bs, sector, buf, len, io_done, NULL);
+            wait();
 
             for (j = 0, b = buf; j < len; ++j, b += BDRV_SECTOR_SIZE) {
                 int ver = sector_map[sector + j];
