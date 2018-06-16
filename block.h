@@ -11,8 +11,8 @@ typedef struct BlockDriverInfo {
     int64_t vm_state_offset;
 } BlockDriverInfo;
 
-#define BDRV_SECTOR_BITS   9
+#define BDRV_SECTOR_BITS   9ULL
 #define BDRV_SECTOR_SIZE   (1ULL << BDRV_SECTOR_BITS)
-#define BDRV_SECTOR_MASK   ~(BDRV_SECTOR_SIZE - 1)
+#define BDRV_SECTOR_MASK   ~(BDRV_SECTOR_SIZE - 1ULL)
 
 #endif

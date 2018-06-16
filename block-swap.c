@@ -321,7 +321,6 @@ typedef struct BDRVSwapState {
     DubTree t;
     void *find_context;
 
-    int ios_outstanding;
     struct SwapAIOCB *read_queue_head;
     struct SwapAIOCB *read_queue_tail;
     TAILQ_HEAD(, SwapAIOCB) rlimit_write_queue;
@@ -1763,7 +1762,6 @@ static inline void swap_common_cb(SwapAIOCB *acb)
     }
     swap_stats.blocked_time += dt;
 #endif
-    --(s->ios_outstanding);
     if (TAILQ_ACTIVE(acb, rlimit_write_entry)) {
         TAILQ_REMOVE(&s->rlimit_write_queue, acb,
                      rlimit_write_entry);
@@ -1858,7 +1856,7 @@ static void * swap_read_thread(void *_s)
 static SwapAIOCB *swap_aio_get(BlockDriverState *bs,
         BlockDriverCompletionFunc *cb, void *opaque)
 {
-    BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
+    //BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
     SwapAIOCB *acb;
     //acb = aio_get(&swap_aio_pool, bs, cb, opaque);
     acb = calloc(1, sizeof(*acb));
@@ -1869,8 +1867,6 @@ static SwapAIOCB *swap_aio_get(BlockDriverState *bs,
     acb->map = NULL;
     acb->splits = 0;
     memset(&acb->rlimit_write_entry, 0, sizeof(acb->rlimit_write_entry));
-
-    ++(s->ios_outstanding);
 
 #ifdef SWAP_STATS
     acb->t0 = os_get_clock();
@@ -1900,7 +1896,6 @@ static int __swap_nonblocking_write(BDRVSwapState *s, const uint8_t *buf,
 
 static void swap_rmw_cb(void *opaque)
 {
-    printf("%s\n", __FUNCTION__);
     SwapAIOCB *acb = opaque;
     BlockDriverState *bs = acb->bs;
     BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
@@ -2171,6 +2166,7 @@ BlockDriverAIOCB *swap_aio_read(BlockDriverState *bs,
     return (BlockDriverAIOCB *)acb;
 }
 
+#if 0
 static void
 swap_complete_write_acb(SwapAIOCB *acb)
 {
@@ -2182,6 +2178,7 @@ swap_complete_write_acb(SwapAIOCB *acb)
 #endif
     ioh_event_set(&acb->event);
 }
+#endif
 
 #ifndef LIBIMG
 static void
@@ -2317,17 +2314,14 @@ static int __swap_nonblocking_write(BDRVSwapState *s, const uint8_t *buf,
         found = __swap_nonblocking_read(s, acb->tmp ? acb->tmp : acb->buffer,
                                         acb->block, acb->size, &acb->map);
         if (found < 0) {
-            fprintf(stderr, "no event\n");
             free(acb->tmp);
             free(acb);
             acb = NULL;
         } else if (found == acb->size) {
-            fprintf(stderr, "found all\n");
             swap_rmw_cb(acb);
             acb = NULL;
             //ioh_event_set(&acb->event);
         } else {
-            fprintf(stderr, "queuing read\n");
             ioh_event_init(&acb->event, swap_rmw_cb, acb);
             __swap_queue_read_acb(bs, acb);
         }
@@ -2386,19 +2380,16 @@ int swap_flush(BlockDriverState *bs)
 {
     BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
     LruCache *bc = &s->bc;
-    SwapAIOCB *acb, *next;
+    //SwapAIOCB *acb, *next;
     int i;
 
     /* Complete ratelimited writes */
 
-#if 1
+#if 0
     /* Wait for all outstanding ios completing. */
     //aio_wait_start();
     //aio_poll();
-    if (s->ios_outstanding > 0) {
-        debug_printf("swap: finishing %d outstanding IOs\n", s->ios_outstanding);
-    }
-    while (s->ios_outstanding) {
+    while (s->outstanding_writes) {
         TAILQ_FOREACH_SAFE(acb, &s->rlimit_write_queue, rlimit_write_entry,
                            next)
             swap_complete_write_acb(acb);
