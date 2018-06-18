@@ -163,13 +163,17 @@ void signal_handler(int s)
 
 int main(int argc, char **argv)
 {
+    int r;
     if (argc != 2) {
         fprintf(stderr, "Usage: %s [filename.swap]\n", argv[0]);
         exit(1);
     }
+    r = mlockall(MCL_CURRENT | MCL_FUTURE);
+    if (r < 0) {
+        err(1, "mlockall failed");
+    }
 
     char *fn = argv[1];
-    int r;
     struct sigaction sig;
     sig.sa_handler = signal_handler;
     sigemptyset(&sig.sa_mask);
