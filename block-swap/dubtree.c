@@ -1024,7 +1024,7 @@ static inline void sift_down(DubTree *t, HeapElem **hp, size_t end)
     }
 }
 
-#define io_sz (1<<23)
+#define io_sz (1<<20)
 
 static inline char *name_chunk(const char *prefix, chunk_id_t chunk_id)
 {
@@ -1577,8 +1577,14 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
                     chunk_exceeded(t_buffered))) {
             int q;
 
-            if (chunk_exceeded(t_buffered)) {
-                assert(valid_chunk_id(&last_chunk_id));
+            if (chunk_exceeded(t_buffered) && valid_chunk_id(&last_chunk_id)) {
+
+                /* Handle the case of merging an entire chunk as-is, to avoid
+                 * rewriting it. In the case where we filled an entire chunk
+                 * from the newly inserted keys, there will be no valid chunk
+                 * id set for them, which we check for by requiring a valid
+                 * last_chunk_id. */
+
                 int chunk = add_chunk_id(&ud);
                 set_chunk_id(ud, chunk, last_chunk_id);
                 for (q = 0; q < n_buffered; ++q) {
@@ -1672,11 +1678,11 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
                 e->size = min->size;
                 t_buffered += min->size;
             }
+            last_chunk_id = min->chunk_id;
         } else {
             garbage += min->size;
         }
 
-        last_chunk_id = min->chunk_id;
 
         /* Find next min for next round. */
         if (min->st) {
