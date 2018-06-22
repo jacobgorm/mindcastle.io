@@ -1,6 +1,5 @@
 
 #define _GNU_SOURCE
-#include <assert.h>
 #include <err.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -134,7 +133,9 @@ static int fds[2];
 static void io_done(void *opaque, int ret) {
     char msg;
     int r = write(fds[1], &msg, sizeof(msg));
-    assert(r == 1);
+    if (r != 1) {
+        err(1, "write() failed\n");
+    }
 }
 
 static void wait(void) {
