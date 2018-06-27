@@ -13,53 +13,62 @@
 
 static inline node_t alloc_node(SimpleTree *st)
 {
-    SimpleTreeMetaNode *meta = &off2ptr(st->mem, 0)->u.mn;
+    SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
 
+    int r;
     int n = st->mem ? meta->num_nodes : 0;
+
     if (!((n - 1) & n)) {
         st->mem = realloc(st->mem, simpletree_node_size() * (n ? 2 * n : 1));
-        meta = &off2ptr(st->mem, 0)->u.mn;
+        put_node(st, 0);
+        meta = &get_node(st, 0)->u.mn;
         meta->num_nodes = n;
     }
 
-    return meta->num_nodes++;
+    r = meta->num_nodes++;
+    put_node(st, 0);
+    return r;
 }
 
 static inline
 void set_node_info(SimpleTree *st, node_t n,
         SimpleTreeNodeType type)
 {
-    SimpleTreeNode *nn = off2ptr(st->mem, n);
+    SimpleTreeNode *nn = get_node(st, n);
     nn->type = type;
     /* Zero rest of node after header. XXX revisit later. */
     memset(&nn[1], 0, simpletree_node_size() - sizeof(*nn));
+    put_node(st, n);
     __sync_synchronize();
 }
 
 void simpletree_init(SimpleTree *st)
 {
-    SimpleTreeMetaNode *meta;
-
     assert(st);
     st->magic = 0xcafebabe;
     st->mem = NULL;
+    st->user_data = NULL;
     st->prev = 0;
+    st->refs = 0;
+    st->users = 0;
 
     memset(st->nodes, 0, sizeof(st->nodes));
 
     alloc_node(st);
     set_node_info(st, 0, SimpleTreeNode_Meta);
 
-    meta = &off2ptr(st->mem, 0)->u.mn;
+    SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
     meta->maxLevel = 0;
     meta->first = 0;
     meta->magic = 0xfedeabe0;
+    put_node(st, 0);
     __sync_synchronize();
 }
 
 void simpletree_clear(SimpleTree *st)
 {
     free(st->mem);
+    free(st->user_data);
 }
 
 /* Create a new SimpleTree instance wrapping the tree with meta node mn, in the
@@ -75,12 +84,17 @@ void simpletree_open(SimpleTree *st, void *mem)
     st->magic = 0xcafebabe;
     st->mem = mem;
 
-    meta = &off2ptr(st->mem, 0)->u.mn;
+    meta = &get_node(st, 0)->u.mn;
 
     if (meta->magic!=0xfedeabe0){
         printf("bad magic %x!\n",meta->magic);
     }
+
+    st->user_data = malloc(meta->user_size);
+    memcpy(st->user_data, (uint8_t *) meta + sizeof(*meta), meta->user_size);
+
     assert(meta->magic == 0xfedeabe0);
+    put_node(st, 0);
 }
 
 
@@ -88,24 +102,26 @@ void simpletree_open(SimpleTree *st, void *mem)
 
 static inline node_t create_inner_node(SimpleTree *st)
 {
-    SimpleTreeInnerNode *n;
-    node_t o = alloc_node(st);
-    set_node_info(st, o, SimpleTreeNode_Inner);
-    n = &off2ptr(st->mem, o)->u.in;
-    memset(n->children, 0, sizeof(n->children));
-    n->count = 0;
-    return o;
+    SimpleTreeInnerNode *in;
+    node_t n = alloc_node(st);
+    set_node_info(st, n, SimpleTreeNode_Inner);
+    in = &get_node(st, n)->u.in;
+    memset(in->children, 0, sizeof(in->children));
+    in->count = 0;
+    put_node(st, n);
+    return n;
 }
 
 static inline node_t create_leaf_node(SimpleTree *st)
 {
-    SimpleTreeLeafNode *n;
-    node_t o = alloc_node(st);
-    set_node_info(st, o, SimpleTreeNode_Leaf);
-    n = &off2ptr(st->mem, o)->u.ln;
-    n->count = 0;
-    n->next = 0;
-    return o;
+    SimpleTreeLeafNode *ln;
+    node_t n = alloc_node(st);
+    set_node_info(st, n, SimpleTreeNode_Leaf);
+    ln = &get_node(st, n)->u.ln;
+    ln->count = 0;
+    ln->next = 0;
+    put_node(st, n);
+    return n;
 }
 
 /* Internal function to insert a key into an inner node. */
@@ -113,7 +129,7 @@ static inline node_t create_leaf_node(SimpleTree *st)
 static inline void
 simpletree_insert_inner(SimpleTree *st, int level, SimpleTreeInternalKey key)
 {
-    SimpleTreeInnerNode *n;
+    SimpleTreeInnerNode *in;
 
     /* If no node at this level create one. */
     if (st->nodes[level] == 0) {
@@ -121,21 +137,24 @@ simpletree_insert_inner(SimpleTree *st, int level, SimpleTreeInternalKey key)
         st->nodes[level] = create_inner_node(st);
 
         /* Did the tree just grow taller? */
-        SimpleTreeMetaNode *meta = &off2ptr(st->mem, 0)->u.mn;
+        SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
         if (level > meta->maxLevel) {
             meta->maxLevel = level;
         }
+        put_node(st, 0);
     }
 
-    n = &off2ptr(st->mem, st->nodes[level])->u.in;
-    n->keys[n->count] = key;
-    n->children[n->count] = st->nodes[level - 1];
-    ++(n->count);
+    node_t n = st->nodes[level];
+    in = &get_node(st, n)->u.in;
+    in->keys[in->count] = key;
+    in->children[in->count] = st->nodes[level - 1];
+    ++(in->count);
 
-    if (n->count == SIMPLETREE_INNER_M) {
+    if (in->count == SIMPLETREE_INNER_M) {
         simpletree_insert_inner(st, level + 1, key);
         st->nodes[level] = 0;
     }
+    put_node(st, n);
 }
 
 /* Internal function to insert a key into a leaf node, possibly triggering the
@@ -146,30 +165,32 @@ simpletree_insert_leaf(SimpleTree *st, SimpleTreeInternalKey key, SimpleTreeValu
 {
     /* If no node at this level create one. */
 
-    SimpleTreeLeafNode *n;
-
     if (st->nodes[0] == 0) {
         st->nodes[0] = create_leaf_node(st);
         if (st->prev) {
-            SimpleTreeLeafNode *p = &off2ptr(st->mem, st->prev)->u.ln;
+            SimpleTreeLeafNode *p = &get_node(st, st->prev)->u.ln;
             p->next = st->nodes[0];
+            put_node(st, st->prev);
         } else {
-            SimpleTreeMetaNode *meta = &off2ptr(st->mem, 0)->u.mn;
+            SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
             meta->first = st->nodes[0];
+            put_node(st, 0);
         }
     }
 
-    n = &off2ptr(st->mem, st->nodes[0])->u.ln;
-    assert(n);
-    n->keys[n->count] = key;
-    n->values[n->count] = value;
-    ++(n->count);
+    node_t n = st->nodes[0];
+    SimpleTreeLeafNode *ln = &get_node(st, n)->u.ln;
+    assert(ln);
+    ln->keys[ln->count] = key;
+    ln->values[ln->count] = value;
+    ++(ln->count);
 
-    if (n->count == SIMPLETREE_LEAF_M) {
+    if (ln->count == SIMPLETREE_LEAF_M) {
         simpletree_insert_inner(st, 1, key);
         st->prev = st->nodes[0];
         st->nodes[0] = 0;
     }
+    put_node(st, n);
 
 }
 
@@ -196,7 +217,7 @@ void simpletree_insert(SimpleTree *st, uint64_t key, SimpleTreeValue v)
 void simpletree_finish(SimpleTree *st)
 {
     int i;
-    SimpleTreeMetaNode *meta = &off2ptr(st->mem, 0)->u.mn;
+    SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
     assert(meta->magic == 0xfedeabe0);
 
     for (i = 0 ; i < meta->maxLevel; ++i) {
@@ -207,14 +228,16 @@ void simpletree_finish(SimpleTree *st)
             for (j = i + 1; j <= meta->maxLevel; ++j) {
                 node_t parent = st->nodes[j];
                 if (parent != 0) {
-                    SimpleTreeInnerNode *p = &off2ptr(st->mem, parent)->u.in;
-                    p->children[p->count] = st->nodes[i];
+                    SimpleTreeInnerNode *in = &get_node(st, parent)->u.in;
+                    in->children[in->count] = st->nodes[i];
+                    put_node(st, parent);
                     break;
                 }
             }
         }
     }
     meta->root = st->nodes[meta->maxLevel];
+    put_node(st, 0);
 }
 
 static inline int less_than(
@@ -249,49 +272,61 @@ static inline int lower_bound(const SimpleTree *st,
  * the current depth as would be possible with a well-formed B-tree. */
 int simpletree_find(SimpleTree *st, uint64_t key, SimpleTreeIterator *it)
 {
-    SimpleTreeMetaNode *meta = &off2ptr(st->mem, 0)->u.mn;
+    int init = st->refs;
+    SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
     const SimpleTreeInternalKey needle = {key};
     node_t n = meta->root;
+    int r = 0;
 
     while (n) {
 
         int pos;
+        node_t next;
 
-        if (off2ptr(st->mem, n)->type == SimpleTreeNode_Inner) {
+        SimpleTreeNode *sn = get_node(st, n);
+        int type = sn->type;
 
-            SimpleTreeInnerNode *in = &off2ptr(st->mem, n)->u.in;
+        if (type == SimpleTreeNode_Inner) {
+
+            SimpleTreeInnerNode *in = &sn->u.in;
             pos = lower_bound(st, in->keys, in->count, &needle);
-            n = in->children[pos];
+            next = in->children[pos];
 
         } else {
 
-            SimpleTreeLeafNode *ln = &off2ptr(st->mem, n)->u.ln;
+            SimpleTreeLeafNode *ln = &sn->u.ln;
             pos = lower_bound(st, ln->keys, ln->count, &needle);
             assert(pos < SIMPLETREE_LEAF_M);
 
             if (pos < ln->count) {
                 it->node = n;
                 it->index = pos;
-                return 1;
+                r = 1;
             } else {
                 it->node = 0;
                 it->index = 0;
-                return 0;
             }
 
+            next = 0;
         }
+
+        put_node(st, n);
+        n = next;
     }
-    return 0;
+    put_node(st, 0);
+    assert(st->refs == init);
+    return r;
 }
 
 void simpletree_set_user(SimpleTree *st, const void *data, size_t size)
 {
-    SimpleTreeMetaNode *meta = &off2ptr(st->mem, 0)->u.mn;
+    SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
     meta->user_size = size;
 
     if (size <= (SIMPLETREE_NODESIZE - sizeof(*meta))) {
         memcpy((uint8_t *) meta + sizeof(*meta), data, size);
     } else {
+        assert(0);
         int take;
         int left;
         const uint8_t *in = data;
@@ -299,22 +334,16 @@ void simpletree_set_user(SimpleTree *st, const void *data, size_t size)
         for (left = size; left > 0; in += take, left -= take) {
             take = left < SIMPLETREE_NODESIZE ? left : SIMPLETREE_NODESIZE;
             node_t n = alloc_node(st);
-            out = (uint8_t *) off2ptr(st->mem, n);
+            out = (uint8_t *) get_node(st, n);
             memcpy(out, in, take);
             memset(out + take, 0, SIMPLETREE_NODESIZE - take);
+            put_node(st, n);
         }
-        meta = NULL;
     }
+    put_node(st, 0);
 }
 
 const void *simpletree_get_user(SimpleTree *st)
 {
-    SimpleTreeMetaNode *meta = &off2ptr(st->mem, 0)->u.mn;
-    if (meta->user_size <= (SIMPLETREE_NODESIZE - sizeof(*meta))) {
-        return (void *) (uint8_t *) meta + sizeof(*meta);
-    } else {
-        node_t n = meta->num_nodes - (meta->user_size + SIMPLETREE_NODESIZE -
-                1) / SIMPLETREE_NODESIZE;
-        return (void *) off2ptr(st->mem, n);
-    }
+    return st->user_data;
 }

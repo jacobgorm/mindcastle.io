@@ -23,8 +23,11 @@ typedef struct SimpleTree {
     node_t nodes[16];
     node_t prev;
     uint8_t *mem;
+    uint8_t *user_data;
     uint64_t size;
     uint32_t magic;
+    int refs;
+    int users;
 
 } SimpleTree;
 
@@ -88,6 +91,7 @@ int simpletree_find(SimpleTree *st, uint64_t key, SimpleTreeIterator *it);
 void simpletree_open(SimpleTree *st, void *mem);
 void simpletree_set_user(SimpleTree *st, const void *data, size_t size);
 const void *simpletree_get_user(SimpleTree *st);
+const void simpletree_put_user(SimpleTree *st);
 
 /* Free the per-process in-memory tree representation and
  * NULL the pointer to it to prevent future use. */
@@ -107,31 +111,45 @@ static inline size_t simpletree_node_size(void)
     return SIMPLETREE_NODESIZE;
 }
 
-static inline SimpleTreeNode* off2ptr(void *mem, node_t n)
+static inline SimpleTreeNode* get_node(const SimpleTree *st, node_t n)
 {
-    return (SimpleTreeNode*) ((uint8_t*)mem + simpletree_node_size() * n);
+    SimpleTree *tmp = (SimpleTree *) st;
+    ++(tmp->refs);
+    return (SimpleTreeNode*) ((uint8_t*) st->mem + simpletree_node_size() * n);
+}
+
+static inline void put_node(const SimpleTree *st, node_t n)
+{
+    SimpleTree *tmp = (SimpleTree *) st;
+    assert(tmp->refs > 0);
+    --(tmp->refs);
 }
 
 static inline size_t simpletree_get_nodes_size(SimpleTree *st)
 {
-    SimpleTreeMetaNode *meta = &off2ptr(st->mem, 0)->u.mn;
-    return simpletree_node_size() * meta->num_nodes;
+    SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
+    size_t r = simpletree_node_size() * meta->num_nodes;
+    put_node(st, 0);
+    return r;
 }
 
 static inline void simpletree_begin(const SimpleTree *st, SimpleTreeIterator *it)
 {
-    SimpleTreeMetaNode *meta = &off2ptr(st->mem, 0)->u.mn;
+    SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
     it->node = meta->first;
     it->index = 0;
+    put_node(st, 0);
 }
 
 static inline void simpletree_next(const SimpleTree *st, SimpleTreeIterator *it)
 {
-    SimpleTreeLeafNode *n = &off2ptr(st->mem, it->node)->u.ln;
-    if (++(it->index) == n->count) {
-        it->node = n->next;
+    node_t n = it->node;
+    SimpleTreeLeafNode *ln = &get_node(st, n)->u.ln;
+    if (++(it->index) == ln->count) {
+        it->node = ln->next;
         it->index = 0;
     }
+    put_node(st, n);
 }
 
 static inline int simpletree_at_end(const SimpleTree *st, SimpleTreeIterator *it)
@@ -144,11 +162,13 @@ static inline SimpleTreeResult simpletree_read(const SimpleTree *st,
 {
     assert(st->mem);
     SimpleTreeResult r;
-    const SimpleTreeLeafNode *n = &off2ptr(st->mem, it->node)->u.ln;
-    const SimpleTreeInternalKey *k = &n->keys[it->index];
+    node_t n = it->node;
+    const SimpleTreeLeafNode *ln = &get_node(st, n)->u.ln;
+    const SimpleTreeInternalKey *k = &ln->keys[it->index];
 
     r.key = k->key;
-    r.value = n->values[it->index];
+    r.value = ln->values[it->index];
+    put_node(st, n);
     return r;
 }
 
