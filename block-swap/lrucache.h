@@ -1,6 +1,8 @@
 #ifndef __LRUCACHE_H__
 #define __LRUCACHE_H__
 
+#include <stdio.h>
+
 typedef struct LruCacheLine {
     uintptr_t key;
     uintptr_t value;

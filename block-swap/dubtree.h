@@ -74,13 +74,13 @@ typedef struct DubTree {
 } DubTree;
 
 int dubtree_insert(DubTree *t, int numKeys, uint64_t* keys, uint8_t *values,
-        uint32_t *sizes, int force_level);
+        uint32_t *sizes, const uint8_t *hashes, int force_level);
 
 void *dubtree_prepare_find(DubTree *t);
 void dubtree_end_find(DubTree *t, void *ctx);
 
 int dubtree_find(DubTree *t, uint64_t start, int num_keys,
-        uint8_t *out, uint8_t *map, uint32_t *sizes,
+        uint8_t *out, uint8_t *map, uint32_t *sizes, uint8_t *hashes,
         read_callback cb, void *opaque, void *ctx);
 
 int dubtree_init(DubTree *t, char **fallbacks, char *cache,

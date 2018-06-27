@@ -3,13 +3,13 @@
 
 #include "aio.h"
 #include "cbf.h"
+#include "crypto.h"
 #include "dubtree.h"
 #include "lrucache.h"
 #include "simpletree.h"
 #include "lz4.h"
 #include "hex.h"
 #include "rtc.h"
-#include <blake2.h>
 
 /* These must go last or they will mess with e.g. asprintf() */
 #include <curl/curl.h>
@@ -39,7 +39,7 @@
 
 static int populate_cbf(DubTree *t, int n);
 static dubtree_handle_t prepare_http_get(DubTree *t,
-        int synchronous, const char *url, int size);
+        int synchronous, const char *url, chunk_id_t chunk_id);
 
 typedef struct {
     dubtree_handle_t f;
@@ -155,7 +155,12 @@ int dubtree_init(DubTree *t, char **fallbacks, char *cache,
             printf("attempt to open fallback %s\n", fn);
             if (!memcmp("http://", fn, 7) || !memcmp("https://", fn, 8)) {
                 printf("fetch %s\n", fn);
-                f = prepare_http_get(t, 1, fn, sizeof(*(t->header)));
+                assert(0);
+#if 0
+                chunk_id_t dummy;
+                dummy.size =  sizeof(*(t->header));
+                f = prepare_http_get(t, 1, fn, dummy);
+#endif
             } else {
                 printf("open RO %s\n", fn);
                 f = dubtree_open_existing_readonly(fn);
@@ -361,6 +366,7 @@ static void CALLBACK read_complete_scatter(DWORD rc, DWORD got, OVERLAPPED *o)
 #define MAX_BLOCKED_READS 256
 
 typedef struct {
+    chunk_id_t chunk_id;
     int refcount;
     double t0;
     DubTree *t;
@@ -603,7 +609,7 @@ static inline void *map_file(dubtree_handle_t f, uint32_t sz, int writable)
 #else
     m = mmap(NULL, sz, PROT_READ | (writable ? PROT_WRITE : 0), writable ? MAP_SHARED : MAP_PRIVATE, f->fd, 0);
     if (m == MAP_FAILED) {
-        err(1, "unable to map file\n");
+        err(1, "unable to map file fd=%d,sz=%u %s:%d", f->fd, sz,  __FUNCTION__, __LINE__);
     }
 #endif
     return m;
@@ -758,7 +764,7 @@ void dubtree_end_find(DubTree *t, void *ctx)
 }
 
 int dubtree_find(DubTree *t, uint64_t start, int num_keys,
-        uint8_t *out, uint8_t *map, uint32_t *sizes,
+        uint8_t *out, uint8_t *map, uint32_t *sizes, uint8_t *hashes,
         read_callback cb, void *opaque, void *ctx)
 {
     int i, r;
@@ -766,6 +772,7 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
         chunk_id_t chunk_id;
         int offset;
         int size;
+        hash_t hash;
     };
     const int max_inline_keys = 8;
     struct source inline_sources[max_inline_keys];
@@ -876,6 +883,7 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
                         sources[idx].chunk_id = get_chunk_id(cud, k.value.chunk);
                         sources[idx].offset = k.value.offset;
                         sources[idx].size = k.value.size;
+                        sources[idx].hash = k.value.hash;
                         relevant[i] = 1;
                         --missing;
                     }
@@ -899,6 +907,8 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
                        size);
         }
         sizes[i] = size;
+        memcpy(hashes + CRYPTO_TAG_SIZE * i, sources[i].hash.bytes,
+                CRYPTO_TAG_SIZE);
         dst += size;
     }
 
@@ -964,6 +974,7 @@ typedef struct {
     int chunk;
     int offset;
     int size;
+    hash_t hash;
     chunk_id_t chunk_id;
 } HeapElem;
 
@@ -1033,17 +1044,8 @@ static inline char *name_chunk(const char *prefix, chunk_id_t chunk_id)
     char h[1 + len];
     hex(h, chunk_id.id.full, sizeof(chunk_id.id.full));
     h[len] = '\0';
-    asprintf(&fn, "%s/%s-%x.lvl", prefix, h, chunk_id.size);
+    asprintf(&fn, "%s/%s.lvl", prefix, h);
     return fn;
-}
-
-void strong_hash(chunk_id_t *out, const uint8_t *in, size_t sz)
-{
-    blake2b_state s;
-    blake2b_init(&s, sizeof(out->id.full));
-    blake2b_update(&s, in, sz);
-    blake2b_final(&s, out->id.full, sizeof(out->id.full));
-    out->size = sz;
 }
 
 int curl_sockopt_cb(void *clientp, curl_socket_t curlfd, curlsocktype purpose)
@@ -1103,8 +1105,9 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
         char procfn[32];
         sprintf(procfn, "/proc/self/fd/%d", hgs->fd);
         chunk_id_t chunk_id;
-        strong_hash(&chunk_id, hgs->buffer, hgs->size);
-        //assert(equal_chunk_ids(&chunk_id, &hgs->chunk_id));
+        strong_hash(chunk_id.id.full, hgs->buffer, hgs->size);
+        chunk_id.size = hgs->size;
+        assert(equal_chunk_ids(&chunk_id, &hgs->chunk_id));
         char *fn = name_chunk(t->cache, chunk_id);
         int r = linkat(AT_FDCWD, procfn, AT_FDCWD, fn, AT_SYMLINK_FOLLOW);
         close(hgs->fd);
@@ -1121,7 +1124,7 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
 }
 
 static dubtree_handle_t prepare_http_get(DubTree *t,
-        int synchronous, const char *url, int size)
+        int synchronous, const char *url, chunk_id_t chunk_id)
 {
     dubtree_handle_t f = dubtree_open_tmp(t->cache);
     if (invalid_handle(f)) {
@@ -1130,11 +1133,12 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
     HttpGetState *hgs = hgs_ref(calloc(1, sizeof(*hgs)));
     fprintf(stderr, "%p fetching %s s=%d...\n", hgs, url, synchronous);
     hgs->t0 = rtc();
-    hgs->size = size;
+    hgs->chunk_id = chunk_id;
+    hgs->size = chunk_id.size;
     hgs->t = t;
     hgs->url = strdup(url);
-    dubtree_set_file_size(f, size);
-    hgs->buffer = map_file(f, size, 1);
+    dubtree_set_file_size(f, hgs->size);
+    hgs->buffer = map_file(f, hgs->size, 1);
     hgs->fd = dup(f->fd);
 
     if (synchronous) {
@@ -1188,7 +1192,7 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
                     dubtree_open_existing(fn);
             } else {
                 if (!memcmp("http://", fn, 7) || !memcmp("https://", fn, 8)) {
-                    f = prepare_http_get(t, local, fn, chunk_id.size);
+                    f = prepare_http_get(t, local, fn, chunk_id);
                 } else {
                     f = dubtree_open_existing_readonly(fn);
                 }
@@ -1398,7 +1402,8 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
         err(1, "pipe read failed");
     }
     close(fds[0]);
-    strong_hash(&chunk_id, c->buf, size);
+    strong_hash(chunk_id.id.full, c->buf, size);
+    chunk_id.size = size;
     dubtree_handle_t f = get_chunk(t, chunk_id, 1, 0, &l);
     if (invalid_handle(f)) {
         if (errno == EEXIST) {
@@ -1428,17 +1433,18 @@ static inline int chunk_exceeded(size_t size)
 }
 
 static inline void insert_kv(SimpleTree *st,
-        uint64_t key, int chunk, int offset, int size)
+        uint64_t key, int chunk, int offset, int size, hash_t hash)
 {
     SimpleTreeValue v;
     v.chunk = chunk;
     v.offset = offset;
     v.size = size;
+    v.hash = hash;
     simpletree_insert(st, key, v);
 }
 
 int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
-        uint32_t *sizes, int force_level)
+        uint32_t *sizes, const uint8_t *hashes, int force_level)
 {
     /* Find a free slot at the top level and copy the key there. */
     SimpleTree st;
@@ -1461,7 +1467,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
     uint64_t slot_size = DUBTREE_SLOT_SIZE;
 
     critical_section_enter(&t->write_lock);
-    struct buf_elem {uint64_t key; int offset; int size;};
+    struct buf_elem {uint64_t key; int offset; int size; hash_t hash;};
     struct buf_elem *buffered = t->buffered;
 
     if (num_keys > 0) {
@@ -1474,6 +1480,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
         min->level = -1;
         min->key = keys[0];
         min->size = sizes[0];
+        memcpy(&min->hash, &hashes[0], CRYPTO_TAG_SIZE);
         heap[j] = min;
         sift_up(t, heap, j++);
     }
@@ -1506,6 +1513,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
             min->chunk_id = get_chunk_id(cud, min->chunk);
             min->offset = k.value.offset;
             min->size = k.value.size;
+            min->hash = k.value.hash;
             heap[j] = min;
             sift_up(t, heap, j++);
         } else {
@@ -1589,7 +1597,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
                 set_chunk_id(ud, chunk, last_chunk_id);
                 for (q = 0; q < n_buffered; ++q) {
                     e = &buffered[q];
-                    insert_kv(&st, e->key, chunk, e->offset, e->size);
+                    insert_kv(&st, e->key, chunk, e->offset, e->size, e->hash);
                     total += e->size;
                 }
 
@@ -1611,7 +1619,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
                     }
 
                     e = &buffered[q];
-                    insert_kv(&st, e->key, out_chunk, b, e->size);
+                    insert_kv(&st, e->key, out_chunk, b, e->size, e->hash);
                     total += e->size;
                     b += e->size;
 
@@ -1657,7 +1665,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
                     deref[min->chunk] = chunk;
                     set_chunk_id(ud, chunk, get_chunk_id(old_ud, min->chunk));
                 }
-                insert_kv(&st, min->key, chunk, min->offset, min->size);
+                insert_kv(&st, min->key, chunk, min->offset, min->size, min->hash);
                 total += min->size;
             } else {
 
@@ -1676,6 +1684,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
                 e->key = min->key;
                 e->offset = min->offset;
                 e->size = min->size;
+                e->hash = min->hash;
                 t_buffered += min->size;
             }
             last_chunk_id = min->chunk_id;
@@ -1708,10 +1717,13 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
                 min->chunk_id = get_chunk_id(cud, min->chunk);
                 min->offset = k.value.offset;
                 min->size = k.value.size;
+                min->hash = k.value.hash;
             } else {
                 min->key = keys[min_idx];
                 min->offset = min_offset;
                 min->size = sizes[min_idx];
+                memcpy(&min->hash, &hashes[CRYPTO_TAG_SIZE * min_idx],
+                        CRYPTO_TAG_SIZE);
             }
         }
         sift_down(t, heap, j);
@@ -1740,7 +1752,8 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
 
     chunk_id_t tree_chunk;
     uint32_t tree_size = simpletree_get_nodes_size(&st);
-    strong_hash(&tree_chunk, st.mem, tree_size);
+    strong_hash(tree_chunk.id.full, st.mem, tree_size);
+    tree_chunk.size = tree_size;
     int l;
     dubtree_handle_t f = get_chunk(t, tree_chunk, 1, 0, &l);
     if (invalid_handle(f)) {

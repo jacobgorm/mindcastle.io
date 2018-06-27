@@ -2,6 +2,7 @@
  * Block driver for swap dubtree databases
  *
  * Copyright (c) 2012-2016 Bromium Inc.
+ * Copyright (c) 2017-2018 Jacob Gorm Hansen.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -41,6 +42,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <fcntl.h>
+#include <openssl/rand.h>
 
 #include "aio.h"
 #include "ioh.h"
@@ -63,10 +65,13 @@
 #include "block-swap.h"
 #include "block-swap/dubtree_io.h"
 #include "block-swap/dubtree.h"
+#include "block-swap/crypto.h"
 #include "block-swap/hashtable.h"
 #include "block-swap/lrucache.h"
 
 #include <lz4.h>
+
+const uint8_t the_key[16] = "0123456789abcdef";
 
 #define LIBIMG
 
@@ -359,6 +364,7 @@ typedef struct SwapAIOCB {
     uint32_t modulo;
     uint8_t *decomp;
     uint32_t *sizes;
+    uint8_t *hashes;
     uint8_t *map;
     size_t orig_size;
     ioh_event event;
@@ -387,7 +393,8 @@ static void *swap_read_thread(void *_s);
 /* Wrappers for compress and expand functions. */
 
 static inline
-size_t swap_set_key(void *out, const void *in)
+size_t swap_set_key(void *out, uint8_t *hash, const void *in,
+        const uint8_t *key, const uint8_t *iv)
 {
     /* Caller has allocated ample space for compression overhead, so we don't
      * worry about about running out of space. However, there is no point in
@@ -399,33 +406,42 @@ size_t swap_set_key(void *out, const void *in)
     swap_stats.compressed += DUBTREE_BLOCK_SIZE;
 #endif
 
-    size_t sz = LZ4_compress_default((const char*)in, (char*) out, DUBTREE_BLOCK_SIZE, DUBTREE_BLOCK_SIZE * 2);
-    if (sz >= DUBTREE_BLOCK_SIZE) {
-        memcpy(out, in, DUBTREE_BLOCK_SIZE);
-        sz = DUBTREE_BLOCK_SIZE;
+    uint8_t tmp[2 * DUBTREE_BLOCK_SIZE];
+    int size = LZ4_compress_default((const char*)in, (char*) tmp, DUBTREE_BLOCK_SIZE, DUBTREE_BLOCK_SIZE * 2);
+    const uint8_t *src;
+    if (size >= DUBTREE_BLOCK_SIZE) {
+        src = in;
+        size = DUBTREE_BLOCK_SIZE;
+    } else {
+        src = tmp;
     }
-
-    return sz;
+    memcpy(out, iv, CRYPTO_IV_SIZE);
+    size = CRYPTO_IV_SIZE + encrypt128(out + CRYPTO_IV_SIZE, hash, src, size, key, iv);
+    return size;
 }
 
-static inline int swap_get_key(void *out, const void *in, size_t sz)
+static inline int swap_get_key(void *out, const void *in, int size, const uint8_t *hash)
 {
 #ifdef SWAP_STATS
     swap_stats.decompressed += DUBTREE_BLOCK_SIZE;
 #endif
 
-    if (sz == DUBTREE_BLOCK_SIZE) {
-        memcpy(out, in, DUBTREE_BLOCK_SIZE);
+    uint8_t tmp[2 * DUBTREE_BLOCK_SIZE];
+
+    size = decrypt128(tmp, in + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE, hash, the_key, in);
+
+    if (size == DUBTREE_BLOCK_SIZE) {
+        memcpy(out, tmp, DUBTREE_BLOCK_SIZE);
     } else {
-        int unsz = LZ4_decompress_safe((const char*)in, (char*)out,
-                sz, DUBTREE_BLOCK_SIZE);
-        if (unsz != DUBTREE_BLOCK_SIZE) {
+        int unsize = LZ4_decompress_safe((const char*)tmp, (char*)out,
+                size, DUBTREE_BLOCK_SIZE);
+        if (unsize != DUBTREE_BLOCK_SIZE) {
 #ifndef __APPLE__
             /* On OSX we don't like unclean exists, but on Windows our guest
              * will BSOD if we throw a read error. */
-            errx(1, "swap: bad block size %d", unsz);
+            errx(1, "swap: bad block size %d", unsize);
 #else
-            warnx("swap: bad block size %d", unsz);
+            warnx("swap: bad block size %d", unsize);
 #endif
             return -1;
         }
@@ -535,6 +551,7 @@ struct insert_context {
     uint8_t *cbuf;
     uint64_t *keys;
     uint32_t *sizes;
+    const uint8_t *hashes;
     size_t total_size;
 };
 
@@ -573,7 +590,7 @@ swap_insert_thread(void * _s)
         int i;
         uint32_t load;
 
-        r = dubtree_insert(&s->t, n, keys, cbuf, c->sizes, 0);
+        r = dubtree_insert(&s->t, n, keys, cbuf, c->sizes, c->hashes, 0);
         free(c->sizes);
 
         swap_lock(s);
@@ -633,6 +650,8 @@ swap_write_thread(void *_s)
     uint8_t *cbuf = NULL;
     uint64_t *keys = NULL;
     uint32_t *sizes = NULL;
+    uint8_t *hashes = NULL;
+    uint8_t *ivs = NULL;
     uint32_t total_size = 0;
     int max = 0;
     int n = 0;
@@ -702,6 +721,7 @@ wait:
             c->cbuf = cbuf;
             c->keys = keys;
             c->sizes = sizes;
+            c->hashes = hashes;
             c->total_size = total_size;
 
             swap_wait_can_insert(s);
@@ -711,6 +731,7 @@ wait:
             cbuf = NULL;
             keys = NULL;
             sizes = NULL;
+            hashes = NULL;
             max = n = 0;
             total_size = 0;
         }
@@ -727,6 +748,9 @@ wait:
             max = max ? 2 * max : 1;
             keys = realloc(keys, sizeof(keys[0]) * max);
             sizes = realloc(sizes, sizeof(sizes[0]) * max);
+            hashes = realloc(hashes, CRYPTO_TAG_SIZE * max);
+            ivs = realloc(ivs, CRYPTO_IV_SIZE * max);
+            //random_bytes(ivs, CRYPTO_IV_SIZE * n);
         }
 
         /* The skip check above only works for duplicates already queued,
@@ -739,10 +763,14 @@ wait:
 
         keys[n] = key;
         if (s->store_uncompressed) {
+            assert(0);
             memcpy(cbuf + total_size, ptr, DUBTREE_BLOCK_SIZE);
             size = DUBTREE_BLOCK_SIZE;
         } else {
-            size = swap_set_key(cbuf + total_size, ptr);
+            uint8_t *hash = hashes + CRYPTO_TAG_SIZE * n;
+            uint8_t *iv = ivs + CRYPTO_IV_SIZE * n;
+            RAND_bytes(iv, CRYPTO_IV_SIZE);
+            size = swap_set_key(cbuf + total_size, hash, ptr, the_key, iv);
         }
 
         swap_lock(s);
@@ -1087,6 +1115,7 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
     /* Start out with well-defined state. */
     memset(s, 0, sizeof(*s));
     TAILQ_INIT(&s->rlimit_write_queue);
+    crypto_init(); // XXX make per BlockDriverState
 
     s->log_swap_fills = log_swap_fills;
 
@@ -1768,6 +1797,7 @@ static inline void swap_common_cb(SwapAIOCB *acb)
     }
     //aio_del_wait_object(&acb->event);
     free(acb->sizes);
+    free(acb->hashes);
     free(acb);
 }
 
@@ -1931,6 +1961,7 @@ static void dubtree_read_complete_cb(void *opaque, int result)
     uint8_t *t = acb->decomp;
     int64_t count = acb->size;
     uint32_t *sizes = acb->sizes;
+    const uint8_t *hash = acb->hashes;
     uint8_t tmp[SWAP_SECTOR_SIZE];
     uint64_t key = acb->block;
     int r = 0;
@@ -1945,7 +1976,7 @@ static void dubtree_read_complete_cb(void *opaque, int result)
                 swap_stats.decompressed += DUBTREE_BLOCK_SIZE;
 #endif
                 uint8_t *dst = (count < SWAP_SECTOR_SIZE) ? tmp : o;
-                r = swap_get_key(dst, t, sz);
+                r = swap_get_key(dst, t, sz, hash);
                 if (r < 0) {
                     errx(1, "block decompression failed");
                 }
@@ -1955,6 +1986,7 @@ static void dubtree_read_complete_cb(void *opaque, int result)
                 }
                 t += sz;
             }
+            hash += CRYPTO_TAG_SIZE;
 
             o += SWAP_SECTOR_SIZE;
             count -= SWAP_SECTOR_SIZE;
@@ -1989,12 +2021,12 @@ static int __swap_dubtree_read(BDRVSwapState *s, SwapAIOCB *acb)
      * error. */
 
     /* 'sizes' array must be initialized with zeroes. */
-    /* XXX we leak sizes! */
     sizes = calloc(end - start, sizeof(sizes[0]));
     if (!sizes) {
         errx(1, "OOM error %s line %d", __FUNCTION__, __LINE__);
     }
     acb->sizes = sizes;
+    acb->hashes = malloc(CRYPTO_TAG_SIZE * (end - start));
 
     decomp = malloc(DUBTREE_BLOCK_SIZE * (end - start));
     if (!decomp) {
@@ -2011,6 +2043,7 @@ static int __swap_dubtree_read(BDRVSwapState *s, SwapAIOCB *acb)
 
     do {
         r = dubtree_find(&s->t, start, end - start, decomp, map, sizes,
+                acb->hashes,
                 dubtree_read_complete_cb, acb, s->find_context);
     } while (r == -EAGAIN);
 
@@ -2081,7 +2114,9 @@ static int __swap_nonblocking_read(BDRVSwapState *s, uint8_t *buf,
                 dst = take < SWAP_SECTOR_SIZE ? tmp : buf;
                 b = (void *) (uintptr_t) (value & ~SWAP_SIZE_MASK);
                 int sz = value >> SWAP_SIZE_SHIFT;
-                swap_get_key(dst, b, sz);
+                const uint8_t *hash = NULL;
+                assert(hash);
+                swap_get_key(dst, b, sz, hash);
                 if (dst == tmp) {
                     memcpy(buf, tmp, take);
                 }

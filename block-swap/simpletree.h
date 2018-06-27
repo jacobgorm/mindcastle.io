@@ -3,6 +3,7 @@
 
 #include "dubtree_sys.h"
 #include "dubtree_constants.h"
+#include "crypto.h"
 
 typedef uint32_t node_t;
 
@@ -35,6 +36,7 @@ typedef struct {
     uint32_t chunk : 24;
     uint32_t offset : 24;
     uint32_t size : 16;
+    hash_t hash;
 } __attribute__((__packed__)) SimpleTreeValue;
 
 typedef struct SimpleTreeResult {
