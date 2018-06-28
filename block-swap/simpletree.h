@@ -25,7 +25,6 @@ typedef struct SimpleTree {
     uint8_t *mem;
     uint8_t *user_data;
     uint64_t size;
-    uint32_t magic;
     int refs;
     int users;
 
@@ -81,9 +80,9 @@ typedef struct SimpleTreeNode {
     } u;
 } SimpleTreeNode;
 
-void simpletree_init(SimpleTree *st);
+void simpletree_create(SimpleTree *st);
 
-void simpletree_clear(SimpleTree *st);
+void simpletree_close(SimpleTree *st);
 void simpletree_insert(SimpleTree *st, uint64_t key, SimpleTreeValue v);
 void simpletree_finish(SimpleTree *st);
 int simpletree_find(SimpleTree *st, uint64_t key, SimpleTreeIterator *it);

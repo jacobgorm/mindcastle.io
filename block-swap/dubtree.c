@@ -1547,7 +1547,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
     }
 
     /* Create the new B-tree to index the destination level. */
-    simpletree_init(&st);
+    simpletree_create(&st);
 
     uint32_t b = 0;
     int n_buffered = 0;
@@ -1762,7 +1762,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
     }
     dubtree_pwrite(f, st.mem, tree_size, 0);
     put_chunk(t, l);
-    simpletree_clear(&st);
+    simpletree_close(&st);
 
     critical_section_enter(&t->cache_lock);
 

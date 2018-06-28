@@ -31,7 +31,7 @@ static inline node_t alloc_node(SimpleTree *st)
 }
 
 static inline
-void set_node_info(SimpleTree *st, node_t n,
+void set_node_type(SimpleTree *st, node_t n,
         SimpleTreeNodeType type)
 {
     SimpleTreeNode *nn = get_node(st, n);
@@ -42,10 +42,9 @@ void set_node_info(SimpleTree *st, node_t n,
     __sync_synchronize();
 }
 
-void simpletree_init(SimpleTree *st)
+void simpletree_create(SimpleTree *st)
 {
     assert(st);
-    st->magic = 0xcafebabe;
     st->mem = NULL;
     st->user_data = NULL;
     st->prev = 0;
@@ -55,7 +54,7 @@ void simpletree_init(SimpleTree *st)
     memset(st->nodes, 0, sizeof(st->nodes));
 
     alloc_node(st);
-    set_node_info(st, 0, SimpleTreeNode_Meta);
+    set_node_type(st, 0, SimpleTreeNode_Meta);
 
     SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
     meta->maxLevel = 0;
@@ -65,7 +64,7 @@ void simpletree_init(SimpleTree *st)
     __sync_synchronize();
 }
 
-void simpletree_clear(SimpleTree *st)
+void simpletree_close(SimpleTree *st)
 {
     free(st->mem);
     free(st->user_data);
@@ -81,7 +80,6 @@ void simpletree_open(SimpleTree *st, void *mem)
     SimpleTreeMetaNode *meta;
     assert(st);
     memset(st, 0, sizeof(*st));
-    st->magic = 0xcafebabe;
     st->mem = mem;
 
     meta = &get_node(st, 0)->u.mn;
@@ -104,7 +102,7 @@ static inline node_t create_inner_node(SimpleTree *st)
 {
     SimpleTreeInnerNode *in;
     node_t n = alloc_node(st);
-    set_node_info(st, n, SimpleTreeNode_Inner);
+    set_node_type(st, n, SimpleTreeNode_Inner);
     in = &get_node(st, n)->u.in;
     memset(in->children, 0, sizeof(in->children));
     in->count = 0;
@@ -116,7 +114,7 @@ static inline node_t create_leaf_node(SimpleTree *st)
 {
     SimpleTreeLeafNode *ln;
     node_t n = alloc_node(st);
-    set_node_info(st, n, SimpleTreeNode_Leaf);
+    set_node_type(st, n, SimpleTreeNode_Leaf);
     ln = &get_node(st, n)->u.ln;
     ln->count = 0;
     ln->next = 0;
@@ -195,7 +193,7 @@ simpletree_insert_leaf(SimpleTree *st, SimpleTreeInternalKey key, SimpleTreeValu
 }
 
 /* Insert key as part of ordered sequence of inserts, into a tree created with
- * simpletree_init(). Call simpletree_finish() when done with all inserts. */
+ * simpletree_create(). Call simpletree_finish() when done with all inserts. */
 
 void simpletree_insert(SimpleTree *st, uint64_t key, SimpleTreeValue v)
 {
