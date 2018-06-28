@@ -42,16 +42,15 @@ void set_node_type(SimpleTree *st, node_t n,
     __sync_synchronize();
 }
 
+static void simpletree_init(SimpleTree *st)
+{
+    memset(st->nodes, 0, sizeof(*st));
+}
+
 void simpletree_create(SimpleTree *st)
 {
     assert(st);
-    st->mem = NULL;
-    st->user_data = NULL;
-    st->prev = 0;
-    st->refs = 0;
-    st->users = 0;
-
-    memset(st->nodes, 0, sizeof(st->nodes));
+    simpletree_init(st);
 
     alloc_node(st);
     set_node_type(st, 0, SimpleTreeNode_Meta);
@@ -68,19 +67,20 @@ void simpletree_close(SimpleTree *st)
 {
     free(st->mem);
     free(st->user_data);
+    if (st->use_cache) {
+        lru_cache_close(&st->lru);
+        hashtable_clear(&st->ht);
+    }
 }
 
-/* Create a new SimpleTree instance wrapping the tree with meta node mn, in the
- * node space mem, with freelist starting at head. Assumes that mn already has
- * a non-zero refcount. Returns NULL if no tree at this level. XXX will assert
- * on malloc failure, we should change this to have the caller do the malloc,
- * but this will be wasteful for the common case of having no tree. */
 void simpletree_open(SimpleTree *st, void *mem)
 {
     SimpleTreeMetaNode *meta;
-    assert(st);
-    memset(st, 0, sizeof(*st));
+    simpletree_init(st);
     st->mem = mem;
+    st->use_cache = 1;
+    lru_cache_init(&st->lru, 4);
+    hashtable_init(&st->ht, NULL, NULL);
 
     meta = &get_node(st, 0)->u.mn;
 
@@ -95,6 +95,51 @@ void simpletree_open(SimpleTree *st, void *mem)
     put_node(st, 0);
 }
 
+void *simpletree_get_node(SimpleTree *st, node_t n)
+{
+    uint64_t line;
+    LruCacheLine *cl;
+    void *ptr;
+
+    if (hashtable_find(&st->ht, n, &line)) {
+        cl = lru_cache_touch_line(&st->lru, line);
+        ++(cl->users);
+        ptr = (void *) cl->value;
+    } else {
+        ptr = malloc(SIMPLETREE_NODESIZE);
+        void *src = ((uint8_t*) st->mem + SIMPLETREE_NODESIZE * n);
+        memcpy(ptr, src, SIMPLETREE_NODESIZE);
+        for (;;) {
+            line = lru_cache_evict_line(&st->lru);
+            cl = lru_cache_touch_line(&st->lru, line);
+            if (cl->users == 0) {
+                break;
+            }
+        }
+        if (cl->value) {
+            hashtable_delete(&st->ht, cl->key);
+            free((void *) cl->value);
+        }
+        cl->key = n;
+        cl->value = (uintptr_t) ptr;
+        cl->users = 1;
+        hashtable_insert(&st->ht, n, line);
+    }
+    return ptr;
+}
+
+void simpletree_put_node(SimpleTree *st, node_t n)
+{
+    assert(st->use_cache);
+    uint64_t line;
+    LruCacheLine *cl;
+    if (hashtable_find(&st->ht, n, &line)) {
+        cl = lru_cache_get_line(&st->lru, line);
+        --(cl->users);
+    } else {
+        assert(0);
+    }
+}
 
 /* Factory functions for the inner and leaf node types. */
 
@@ -270,7 +315,6 @@ static inline int lower_bound(const SimpleTree *st,
  * the current depth as would be possible with a well-formed B-tree. */
 int simpletree_find(SimpleTree *st, uint64_t key, SimpleTreeIterator *it)
 {
-    int init = st->refs;
     SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
     const SimpleTreeInternalKey needle = {key};
     node_t n = meta->root;
@@ -280,7 +324,6 @@ int simpletree_find(SimpleTree *st, uint64_t key, SimpleTreeIterator *it)
 
         int pos;
         node_t next;
-
         SimpleTreeNode *sn = get_node(st, n);
         int type = sn->type;
 
@@ -312,7 +355,6 @@ int simpletree_find(SimpleTree *st, uint64_t key, SimpleTreeIterator *it)
         n = next;
     }
     put_node(st, 0);
-    assert(st->refs == init);
     return r;
 }
 

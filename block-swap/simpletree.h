@@ -4,6 +4,8 @@
 #include "dubtree_sys.h"
 #include "dubtree_constants.h"
 #include "crypto.h"
+#include "hashtable.h"
+#include "lrucache.h"
 
 typedef uint32_t node_t;
 
@@ -22,11 +24,13 @@ typedef struct SimpleTreeMetaNode {
 typedef struct SimpleTree {
     node_t nodes[16];
     node_t prev;
+    int fd;
     uint8_t *mem;
     uint8_t *user_data;
     uint64_t size;
-    int refs;
-    int users;
+    int use_cache;
+    LruCache lru;
+    HashTable ht;
 
 } SimpleTree;
 
@@ -81,6 +85,8 @@ typedef struct SimpleTreeNode {
 } SimpleTreeNode;
 
 void simpletree_create(SimpleTree *st);
+void *simpletree_get_node(SimpleTree *st, node_t n);
+void simpletree_put_node(SimpleTree *st, node_t n);
 
 void simpletree_close(SimpleTree *st);
 void simpletree_insert(SimpleTree *st, uint64_t key, SimpleTreeValue v);
@@ -106,23 +112,27 @@ static inline size_t simpletree_node_size(void)
     printf("sz %lx\n", sizeof(SimpleTreeNode));
     exit(0);
 #endif
-    assert(sizeof(SimpleTreeNode) <= SIMPLETREE_NODESIZE);
+    assert(sizeof(SimpleTreeNode) <= SIMPLETREE_NODESIZE - 12);
     return SIMPLETREE_NODESIZE;
 }
 
-static inline SimpleTreeNode* get_node(const SimpleTree *st, node_t n)
+static inline SimpleTreeNode* get_node(SimpleTree *st, node_t n, const char *fn, int line)
 {
-    SimpleTree *tmp = (SimpleTree *) st;
-    ++(tmp->refs);
-    return (SimpleTreeNode*) ((uint8_t*) st->mem + simpletree_node_size() * n);
+    if (st->use_cache) {
+        return simpletree_get_node(st, n);
+    } else {
+        return (SimpleTreeNode*) ((uint8_t*) st->mem + simpletree_node_size() * n);
+    }
 }
+#define get_node(__a, __b) get_node((__a), (__b), __FUNCTION__, __LINE__)
 
-static inline void put_node(const SimpleTree *st, node_t n)
+static inline void put_node(SimpleTree *st, node_t n, const char *fn, int line)
 {
-    SimpleTree *tmp = (SimpleTree *) st;
-    assert(tmp->refs > 0);
-    --(tmp->refs);
+    if (st->use_cache) {
+        simpletree_put_node(st, n);
+    }
 }
+#define put_node(__a, __b) put_node((__a), (__b),  __FUNCTION__,__LINE__)
 
 static inline size_t simpletree_get_nodes_size(SimpleTree *st)
 {
@@ -132,7 +142,7 @@ static inline size_t simpletree_get_nodes_size(SimpleTree *st)
     return r;
 }
 
-static inline void simpletree_begin(const SimpleTree *st, SimpleTreeIterator *it)
+static inline void simpletree_begin(SimpleTree *st, SimpleTreeIterator *it)
 {
     SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
     it->node = meta->first;
@@ -140,7 +150,7 @@ static inline void simpletree_begin(const SimpleTree *st, SimpleTreeIterator *it
     put_node(st, 0);
 }
 
-static inline void simpletree_next(const SimpleTree *st, SimpleTreeIterator *it)
+static inline void simpletree_next(SimpleTree *st, SimpleTreeIterator *it)
 {
     node_t n = it->node;
     SimpleTreeLeafNode *ln = &get_node(st, n)->u.ln;
@@ -151,12 +161,12 @@ static inline void simpletree_next(const SimpleTree *st, SimpleTreeIterator *it)
     put_node(st, n);
 }
 
-static inline int simpletree_at_end(const SimpleTree *st, SimpleTreeIterator *it)
+static inline int simpletree_at_end(SimpleTree *st, SimpleTreeIterator *it)
 {
     return (it->node == 0);
 }
 
-static inline SimpleTreeResult simpletree_read(const SimpleTree *st,
+static inline SimpleTreeResult simpletree_read(SimpleTree *st,
         SimpleTreeIterator *it)
 {
     assert(st->mem);
