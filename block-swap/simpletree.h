@@ -112,7 +112,7 @@ static inline size_t simpletree_node_size(void)
     printf("sz %lx\n", sizeof(SimpleTreeNode));
     exit(0);
 #endif
-    assert(sizeof(SimpleTreeNode) <= SIMPLETREE_NODESIZE - 12);
+    assert(sizeof(SimpleTreeNode) <= SIMPLETREE_NODESIZE);
     return SIMPLETREE_NODESIZE;
 }
 

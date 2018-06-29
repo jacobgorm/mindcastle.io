@@ -333,6 +333,8 @@ typedef struct BDRVSwapState {
     int log_swap_fills;
     int store_uncompressed;
 
+    Crypto inline_crypto, read_crypto, write_crypto;
+
 #ifdef _WIN32
     HANDLE heap;
     swap_handle_t volume; /* Volume for opening by id. */
@@ -357,6 +359,7 @@ typedef struct SwapAIOCB {
     struct SwapAIOCB *next;
     TAILQ_ENTRY(SwapAIOCB) rlimit_write_entry;
     BlockDriverState *bs;
+    Crypto *crypto;
     uint64_t block;
     uint32_t size;
     uint8_t *buffer;
@@ -393,7 +396,7 @@ static void *swap_read_thread(void *_s);
 /* Wrappers for compress and expand functions. */
 
 static inline
-size_t swap_set_key(void *out, uint8_t *hash, const void *in,
+size_t swap_set_key(Crypto *crypto, void *out, uint8_t *hash, const void *in,
         const uint8_t *key, const uint8_t *iv)
 {
     /* Caller has allocated ample space for compression overhead, so we don't
@@ -416,11 +419,11 @@ size_t swap_set_key(void *out, uint8_t *hash, const void *in,
         src = tmp;
     }
     memcpy(out, iv, CRYPTO_IV_SIZE);
-    size = CRYPTO_IV_SIZE + encrypt128(out + CRYPTO_IV_SIZE, hash, src, size, key, iv);
+    size = CRYPTO_IV_SIZE + encrypt128(crypto, out + CRYPTO_IV_SIZE, hash, src, size, key, iv);
     return size;
 }
 
-static inline int swap_get_key(void *out, const void *in, int size, const uint8_t *hash)
+static inline int swap_get_key(Crypto *crypto, void *out, const void *in, int size, const uint8_t *hash)
 {
 #ifdef SWAP_STATS
     swap_stats.decompressed += DUBTREE_BLOCK_SIZE;
@@ -428,7 +431,7 @@ static inline int swap_get_key(void *out, const void *in, int size, const uint8_
 
     uint8_t tmp[2 * DUBTREE_BLOCK_SIZE];
 
-    size = decrypt128(tmp, in + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE, hash, the_key, in);
+    size = decrypt128(crypto, tmp, in + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE, hash, the_key, in);
 
     if (size == DUBTREE_BLOCK_SIZE) {
         memcpy(out, tmp, DUBTREE_BLOCK_SIZE);
@@ -770,7 +773,7 @@ wait:
             uint8_t *hash = hashes + CRYPTO_TAG_SIZE * n;
             uint8_t *iv = ivs + CRYPTO_IV_SIZE * n;
             RAND_bytes(iv, CRYPTO_IV_SIZE);
-            size = swap_set_key(cbuf + total_size, hash, ptr, the_key, iv);
+            size = swap_set_key(&s->write_crypto, cbuf + total_size, hash, ptr, the_key, iv);
         }
 
         swap_lock(s);
@@ -1115,7 +1118,6 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
     /* Start out with well-defined state. */
     memset(s, 0, sizeof(*s));
     TAILQ_INIT(&s->rlimit_write_queue);
-    crypto_init(); // XXX make per BlockDriverState
 
     s->log_swap_fills = log_swap_fills;
 
@@ -1234,6 +1236,10 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
         warn("swap: unable to create lrucache for blocks");
         return -1;
     }
+
+    crypto_init(&s->inline_crypto);
+    crypto_init(&s->read_crypto);
+    crypto_init(&s->write_crypto);
 
     for (i = 0; i < 2; ++i) {
         pq_init(&s->pqs[i]);
@@ -1886,7 +1892,7 @@ static void * swap_read_thread(void *_s)
 static SwapAIOCB *swap_aio_get(BlockDriverState *bs,
         BlockDriverCompletionFunc *cb, void *opaque)
 {
-    //BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
+    BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
     SwapAIOCB *acb;
     //acb = aio_get(&swap_aio_pool, bs, cb, opaque);
     acb = calloc(1, sizeof(*acb));
@@ -1896,6 +1902,7 @@ static SwapAIOCB *swap_aio_get(BlockDriverState *bs,
     acb->result = -1;
     acb->map = NULL;
     acb->splits = 0;
+    acb->crypto = &s->read_crypto;
     memset(&acb->rlimit_write_entry, 0, sizeof(acb->rlimit_write_entry));
 
 #ifdef SWAP_STATS
@@ -1976,7 +1983,7 @@ static void dubtree_read_complete_cb(void *opaque, int result)
                 swap_stats.decompressed += DUBTREE_BLOCK_SIZE;
 #endif
                 uint8_t *dst = (count < SWAP_SECTOR_SIZE) ? tmp : o;
-                r = swap_get_key(dst, t, sz, hash);
+                r = swap_get_key(acb->crypto, dst, t, sz, hash);
                 if (r < 0) {
                     errx(1, "block decompression failed");
                 }
@@ -2116,7 +2123,7 @@ static int __swap_nonblocking_read(BDRVSwapState *s, uint8_t *buf,
                 int sz = value >> SWAP_SIZE_SHIFT;
                 const uint8_t *hash = NULL;
                 assert(hash);
-                swap_get_key(dst, b, sz, hash);
+                swap_get_key(&s->inline_crypto, dst, b, sz, hash);
                 if (dst == tmp) {
                     memcpy(buf, tmp, take);
                 }
