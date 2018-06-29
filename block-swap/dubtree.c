@@ -695,7 +695,7 @@ static int populate_cbf(DubTree *t, int n)
     for (int i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
         if (valid_chunk_id(&t->levels[i])) {
             const UserData *cud;
-            simpletree_open(&trees[i], map_chunk(t, t->levels[i]));
+            simpletree_open(&trees[i], map_chunk(t, t->levels[i]), t->levels[i].id);
             cud = simpletree_get_user(&trees[i]);
             n += cud->num_chunks;
         }
@@ -713,7 +713,7 @@ static int populate_cbf(DubTree *t, int n)
             const UserData *cud = simpletree_get_user(st);
             for (int j = 0; j < cud->num_chunks; ++j) {
                 chunk_id_t chunk_id = get_chunk_id(cud, j);
-                cbf_add(&t->cbf, chunk_id.id.full);
+                cbf_add(&t->cbf, chunk_id.id.bytes);
                 ++added;
             }
             unmap_file(st->mem, simpletree_get_nodes_size(st));
@@ -846,7 +846,7 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
         }
         if (!valid_chunk_id(&ct->chunk) && valid_chunk_id(&t->levels[i])) {
             ct->chunk = t->levels[i];
-            simpletree_open(&ct->st, __map_chunk(t, ct->chunk));
+            simpletree_open(&ct->st, __map_chunk(t, ct->chunk), ct->chunk.id);
         }
     }
     critical_section_leave(&t->cache_lock);
@@ -1040,11 +1040,12 @@ static inline void sift_down(DubTree *t, HeapElem **hp, size_t end)
 static inline char *name_chunk(const char *prefix, chunk_id_t chunk_id)
 {
     char *fn;
-    const size_t len = 2 * sizeof(chunk_id.id.full);
+    const size_t len = 2 * sizeof(chunk_id.id);
     char h[1 + len];
-    hex(h, chunk_id.id.full, sizeof(chunk_id.id.full));
+    hex(h, chunk_id.id.bytes, sizeof(chunk_id.id.bytes));
     h[len] = '\0';
-    asprintf(&fn, "%s/%s.lvl", prefix, h);
+    //asprintf(&fn, "%s/%s.lvl", prefix, h);
+    asprintf(&fn, "%s/%016lx.lvl", prefix, chunk_id.id.first64);
     return fn;
 }
 
@@ -1105,7 +1106,7 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
         char procfn[32];
         sprintf(procfn, "/proc/self/fd/%d", hgs->fd);
         chunk_id_t chunk_id;
-        strong_hash(chunk_id.id.full, hgs->buffer, hgs->size);
+        chunk_id.id = strong_hash(hgs->buffer, hgs->size);
         chunk_id.size = hgs->size;
         assert(equal_chunk_ids(&chunk_id, &hgs->chunk_id));
         char *fn = name_chunk(t->cache, chunk_id);
@@ -1402,7 +1403,7 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
         err(1, "pipe read failed");
     }
     close(fds[0]);
-    strong_hash(chunk_id.id.full, c->buf, size);
+    chunk_id.id = strong_hash(c->buf, size);
     chunk_id.size = size;
     dubtree_handle_t f = get_chunk(t, chunk_id, 1, 0, &l);
     if (invalid_handle(f)) {
@@ -1493,7 +1494,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
             SimpleTreeResult k;
             existing = &trees[i];
 
-            simpletree_open(existing, map_chunk(t, t->levels[i]));
+            simpletree_open(existing, map_chunk(t, t->levels[i]), t->levels[i].id);
 
             cud = simpletree_get_user(existing);
             used = cud->size;
@@ -1736,7 +1737,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
 
     for (int i = 0; i < ud->num_chunks; ++i) {
         chunk_id_t chunk_id = get_chunk_id(ud, i);
-        cbf_add(&t->cbf, chunk_id.id.full);
+        cbf_add(&t->cbf, chunk_id.id.bytes);
     }
 
     /* Finish the combined tree and commit the merge by
@@ -1750,9 +1751,10 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
     simpletree_set_user(&st, ud, ud_size(ud, ud->num_chunks));
     free(ud);
 
+
     chunk_id_t tree_chunk;
     uint32_t tree_size = simpletree_get_nodes_size(&st);
-    strong_hash(tree_chunk.id.full, st.mem, tree_size);
+    tree_chunk.id = simpletree_encrypt(&st);
     tree_chunk.size = tree_size;
     int l;
     dubtree_handle_t f = get_chunk(t, tree_chunk, 1, 0, &l);
@@ -1794,7 +1796,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys, uint8_t *values,
             cud = simpletree_get_user(st);
             for (k = 0; k < cud->num_chunks; ++k) {
                 chunk_id_t dead_chunk_id = cud->chunk_ids[k];
-                if (cbf_remove(&t->cbf, dead_chunk_id.id.full)) {
+                if (cbf_remove(&t->cbf, dead_chunk_id.id.bytes)) {
                     __free_chunk(t, dead_chunk_id);
                 }
             }
@@ -1821,7 +1823,7 @@ int dubtree_delete(DubTree *t)
 
             SimpleTree st;
             const UserData *cud;
-            simpletree_open(&st, map_chunk(t, chunk_id));
+            simpletree_open(&st, map_chunk(t, chunk_id), chunk_id.id);
 
             cud = simpletree_get_user(&st);
             for (j = 0; j < cud->num_chunks; ++j) {
@@ -1906,7 +1908,7 @@ int dubtree_sanity_check(DubTree *t)
             const UserData *cud;
 
             printf("get level %d\n", i);
-            simpletree_open(&st, map_chunk(t, t->levels[i]));
+            simpletree_open(&st, map_chunk(t, t->levels[i]), t->levels[i].id);
             simpletree_begin(&st, &it);
             cud = simpletree_get_user(&st);
             printf("check level %d\n", i);

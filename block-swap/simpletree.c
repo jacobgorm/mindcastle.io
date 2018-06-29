@@ -3,17 +3,20 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <openssl/rand.h>
 
 #include "dubtree_io.h"
+#include "crypto.h"
 
 /* B-tree node ids can max be 16 bits. */
 #if DUBTREE_TREENODES > (1<<16)
 #error "number of tree nodes too large for 16 bits"
 #endif
+static const uint8_t the_key[16 + 1] = "0123456789abcdef\0";
 
 static inline node_t alloc_node(SimpleTree *st)
 {
-    SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
+    SimpleTreeMetaNode *meta = get_meta(st);
 
     int r;
     int n = st->mem ? meta->num_nodes : 0;
@@ -21,7 +24,7 @@ static inline node_t alloc_node(SimpleTree *st)
     if (!((n - 1) & n)) {
         st->mem = realloc(st->mem, simpletree_node_size() * (n ? 2 * n : 1));
         put_node(st, 0);
-        meta = &get_node(st, 0)->u.mn;
+        meta = get_meta(st);
         meta->num_nodes = n;
     }
 
@@ -39,12 +42,12 @@ void set_node_type(SimpleTree *st, node_t n,
     /* Zero rest of node after header. XXX revisit later. */
     memset(&nn[1], 0, simpletree_node_size() - sizeof(*nn));
     put_node(st, n);
-    __sync_synchronize();
 }
 
 static void simpletree_init(SimpleTree *st)
 {
     memset(st->nodes, 0, sizeof(*st));
+    crypto_init(&st->crypto);
 }
 
 void simpletree_create(SimpleTree *st)
@@ -55,34 +58,39 @@ void simpletree_create(SimpleTree *st)
     alloc_node(st);
     set_node_type(st, 0, SimpleTreeNode_Meta);
 
-    SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
+    SimpleTreeMetaNode *meta = get_meta(st);
     meta->maxLevel = 0;
     meta->first = 0;
     meta->magic = 0xfedeabe0;
     put_node(st, 0);
-    __sync_synchronize();
 }
 
 void simpletree_close(SimpleTree *st)
 {
     free(st->mem);
     free(st->user_data);
-    if (st->use_cache) {
+    if (st->is_encrypted) {
         lru_cache_close(&st->lru);
         hashtable_clear(&st->ht);
+        free(st->cached_nodes);
     }
 }
 
-void simpletree_open(SimpleTree *st, void *mem)
+void simpletree_open(SimpleTree *st, void *mem, hash_t hash)
 {
+    assert(hash.first64);
     SimpleTreeMetaNode *meta;
     simpletree_init(st);
+    st->hash = hash;
     st->mem = mem;
-    st->use_cache = 1;
-    lru_cache_init(&st->lru, 4);
+    st->is_encrypted = 1;
+    const int log_lines = 4;
+    lru_cache_init(&st->lru, log_lines);
     hashtable_init(&st->ht, NULL, NULL);
+    st->cached_nodes = malloc(SIMPLETREE_NODESIZE * (1 << log_lines));
 
-    meta = &get_node(st, 0)->u.mn;
+    assert(st->hash.first64);
+    meta = get_meta(st);
 
     if (meta->magic!=0xfedeabe0){
         printf("bad magic %x!\n",meta->magic);
@@ -95,7 +103,15 @@ void simpletree_open(SimpleTree *st, void *mem)
     put_node(st, 0);
 }
 
-void *simpletree_get_node(SimpleTree *st, node_t n)
+static void decrypt_node(SimpleTree *st, uint8_t *dst, const uint8_t *src, hash_t hash)
+{
+    //printf("decrypting with hash %016lx\n", hash.first64);
+    assert(hash.first64);
+    decrypt128(&st->crypto, dst, src + CRYPTO_IV_SIZE, SIMPLETREE_NODESIZE -
+            CRYPTO_IV_SIZE, hash.bytes, the_key, src);
+}
+
+void *simpletree_get_node(SimpleTree *st, node_t n, hash_t hash)
 {
     uint64_t line;
     LruCacheLine *cl;
@@ -106,10 +122,7 @@ void *simpletree_get_node(SimpleTree *st, node_t n)
         ++(cl->users);
         ptr = (void *) cl->value;
     } else {
-        ptr = malloc(SIMPLETREE_NODESIZE);
-        void *src = ((uint8_t*) st->mem + SIMPLETREE_NODESIZE * n);
-        memcpy(ptr, src, SIMPLETREE_NODESIZE);
-        for (;;) {
+       for (;;) {
             line = lru_cache_evict_line(&st->lru);
             cl = lru_cache_touch_line(&st->lru, line);
             if (cl->users == 0) {
@@ -118,8 +131,10 @@ void *simpletree_get_node(SimpleTree *st, node_t n)
         }
         if (cl->value) {
             hashtable_delete(&st->ht, cl->key);
-            free((void *) cl->value);
         }
+        ptr = st->cached_nodes + SIMPLETREE_NODESIZE * line;
+        void *src = ((uint8_t*) st->mem + SIMPLETREE_NODESIZE * n);
+        decrypt_node(st, ptr, src, hash);
         cl->key = n;
         cl->value = (uintptr_t) ptr;
         cl->users = 1;
@@ -130,7 +145,7 @@ void *simpletree_get_node(SimpleTree *st, node_t n)
 
 void simpletree_put_node(SimpleTree *st, node_t n)
 {
-    assert(st->use_cache);
+    assert(st->is_encrypted);
     uint64_t line;
     LruCacheLine *cl;
     if (hashtable_find(&st->ht, n, &line)) {
@@ -180,7 +195,7 @@ simpletree_insert_inner(SimpleTree *st, int level, SimpleTreeInternalKey key)
         st->nodes[level] = create_inner_node(st);
 
         /* Did the tree just grow taller? */
-        SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
+        SimpleTreeMetaNode *meta = get_meta(st);
         if (level > meta->maxLevel) {
             meta->maxLevel = level;
         }
@@ -215,7 +230,7 @@ simpletree_insert_leaf(SimpleTree *st, SimpleTreeInternalKey key, SimpleTreeValu
             p->next = st->nodes[0];
             put_node(st, st->prev);
         } else {
-            SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
+            SimpleTreeMetaNode *meta = get_meta(st);
             meta->first = st->nodes[0];
             put_node(st, 0);
         }
@@ -260,7 +275,7 @@ void simpletree_insert(SimpleTree *st, uint64_t key, SimpleTreeValue v)
 void simpletree_finish(SimpleTree *st)
 {
     int i;
-    SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
+    SimpleTreeMetaNode *meta = get_meta(st);
     assert(meta->magic == 0xfedeabe0);
 
     for (i = 0 ; i < meta->maxLevel; ++i) {
@@ -281,6 +296,54 @@ void simpletree_finish(SimpleTree *st)
     }
     meta->root = st->nodes[meta->maxLevel];
     put_node(st, 0);
+}
+
+static hash_t encrypt_node(SimpleTree *st, node_t n, hash_t next_hash, int depth)
+{
+    SimpleTreeNode *sn = get_node(st, n);
+    SimpleTreeNodeType type = sn->type;
+    if (type == SimpleTreeNode_Meta) {
+        SimpleTreeMetaNode *meta = get_meta(st);
+        hash_t nil = {};
+        meta->root_hash = encrypt_node(st, meta->root, nil, 1 + depth);
+        meta->first_hash = st->first_hash;
+    } else if (type == SimpleTreeNode_Inner) {
+        SimpleTreeInnerNode *in = &sn->u.in;
+        hash_t neighbor_hash = st->tmp_hash;
+        for (int i = in->count; i >= 0; --i) {
+            if (in->children[i]) {
+                neighbor_hash = in->child_hashes[i] =
+                    encrypt_node(st, in->children[i], neighbor_hash, 1 + depth);
+            }
+        }
+    } else if (type == SimpleTreeNode_Leaf) {
+        SimpleTreeLeafNode *ln = &sn->u.ln;
+        ln->next_hash = next_hash;
+    }
+
+    hash_t hash;
+    uint8_t *tmp = malloc(SIMPLETREE_NODESIZE);
+    RAND_bytes(tmp, CRYPTO_IV_SIZE);
+    encrypt128(&st->crypto, tmp + CRYPTO_IV_SIZE, hash.bytes,
+            (uint8_t *) sn, SIMPLETREE_NODESIZE - CRYPTO_IV_SIZE, the_key, tmp);
+    memcpy(sn, tmp, SIMPLETREE_NODESIZE);
+    free(tmp);
+
+    if (type == SimpleTreeNode_Leaf) {
+        st->first_hash = hash;
+        st->tmp_hash = hash;
+    }
+
+    put_node(st, n);
+    return hash;
+}
+
+hash_t simpletree_encrypt(SimpleTree *st)
+{
+    hash_t nil = {};
+    st->hash = encrypt_node(st, 0, nil, 0);
+    assert(st->hash.first64);
+    return st->hash;
 }
 
 static inline int less_than(
@@ -315,16 +378,17 @@ static inline int lower_bound(const SimpleTree *st,
  * the current depth as would be possible with a well-formed B-tree. */
 int simpletree_find(SimpleTree *st, uint64_t key, SimpleTreeIterator *it)
 {
-    SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
+    SimpleTreeMetaNode *meta = get_meta(st);
     const SimpleTreeInternalKey needle = {key};
     node_t n = meta->root;
     int r = 0;
+    hash_t hash = meta->root_hash;
 
     while (n) {
 
         int pos;
         node_t next;
-        SimpleTreeNode *sn = get_node(st, n);
+        SimpleTreeNode *sn = get_node_hash(st, n, hash);
         int type = sn->type;
 
         if (type == SimpleTreeNode_Inner) {
@@ -332,6 +396,7 @@ int simpletree_find(SimpleTree *st, uint64_t key, SimpleTreeIterator *it)
             SimpleTreeInnerNode *in = &sn->u.in;
             pos = lower_bound(st, in->keys, in->count, &needle);
             next = in->children[pos];
+            hash = in->child_hashes[pos];
 
         } else {
 
@@ -341,11 +406,14 @@ int simpletree_find(SimpleTree *st, uint64_t key, SimpleTreeIterator *it)
 
             if (pos < ln->count) {
                 it->node = n;
+                it->hash = hash;
                 it->index = pos;
                 r = 1;
             } else {
                 it->node = 0;
                 it->index = 0;
+                hash_t nil = {};
+                it->hash = nil;
             }
 
             next = 0;
@@ -360,7 +428,7 @@ int simpletree_find(SimpleTree *st, uint64_t key, SimpleTreeIterator *it)
 
 void simpletree_set_user(SimpleTree *st, const void *data, size_t size)
 {
-    SimpleTreeMetaNode *meta = &get_node(st, 0)->u.mn;
+    SimpleTreeMetaNode *meta = get_meta(st);
     meta->user_size = size;
 
     if (size <= (SIMPLETREE_NODESIZE - sizeof(*meta))) {

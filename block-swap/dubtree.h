@@ -18,10 +18,7 @@
 /* The per-instance in-memory representation of a dubtree. */
 
 typedef struct {
-    union {
-        uint64_t first64;
-        uint8_t full[DUBTREE_HASH_SIZE];
-    } id;
+    hash_t id;
     uint32_t size;
 } chunk_id_t;
 
@@ -32,14 +29,12 @@ static inline void clear_chunk_id(chunk_id_t *chunk_id)
 
 static inline int equal_chunk_ids(const chunk_id_t *a, const chunk_id_t *b)
 {
-    return (memcmp(a->id.full, b->id.full, sizeof(a->id.full)) == 0 &&
-            a->size == b->size);
+    return (memcmp(a->id.bytes, b->id.bytes, sizeof(a->id.bytes)) == 0 && a->size == b->size);
 }
 
 static inline int valid_chunk_id(const chunk_id_t *chunk_id)
 {
-    chunk_id_t nil = {};
-    return !equal_chunk_ids(&nil, chunk_id);
+    return chunk_id->id.first128 != 0;
 }
 
 typedef struct DubTreeHeader {

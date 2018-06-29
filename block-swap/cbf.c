@@ -14,7 +14,8 @@ void cbf_init(CBF *cbf, int n)
 
     int bits;
     for (bits = 0; (1 << bits) < m; ++bits);
-    //printf("m=%f, k=%f, M=%d bits=%d\n", m, k, 1 << bits, bits);
+    printf("m=%f, k=%f, M=%d bits=%d\n", m, k, 1 << bits, bits);
+    //assert(k * bits <= 128);
 
     cbf->counters = calloc(1, 1 << bits);
     cbf->bits = bits;
@@ -63,7 +64,15 @@ static inline int cbf_modify(CBF *cbf, const uint8_t *key, const int direction)
 
 int cbf_add(CBF *cbf, const uint8_t *key)
 {
-    int overflow = cbf_modify(cbf, key, 1);
+    // XXX XXX 
+    uint8_t tmp[32];
+    memcpy(tmp, key, 16);
+    for (int i = 0; i < 16; ++i) {
+        tmp[16 + i] = key[15 - i];
+    }
+    // XXX XXX 
+
+    int overflow = cbf_modify(cbf, tmp, 1);
     if (overflow || cbf->n > cbf->max) {
         printf("OVERFLOWING!\n");
         assert(0);
@@ -74,7 +83,15 @@ int cbf_add(CBF *cbf, const uint8_t *key)
 
 int cbf_remove(CBF *cbf, const uint8_t *key)
 {
-    return cbf_modify(cbf, key, -1);
+    // XXX XXX 
+    uint8_t tmp[32];
+    memcpy(tmp, key, 16);
+    for (int i = 0; i < 16; ++i) {
+        tmp[16 + i] = key[15 - i];
+    }
+    // XXX XXX 
+ 
+    return cbf_modify(cbf, tmp, -1);
 }
 
 

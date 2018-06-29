@@ -71,7 +71,7 @@
 
 #include <lz4.h>
 
-const uint8_t the_key[16] = "0123456789abcdef";
+static const uint8_t the_key[16 + 1] = "0123456789abcdef\0";
 
 #define LIBIMG
 

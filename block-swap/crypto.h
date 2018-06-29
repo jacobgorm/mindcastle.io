@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include "dubtree_constants.h"
+
 #define CRYPTO_IV_SIZE 12
 #define CRYPTO_TAG_SIZE 16
 
@@ -12,7 +14,7 @@ typedef struct Crypto {
     void *ctx2;
 } Crypto;
 
-void strong_hash(uint8_t *hash, const uint8_t *in, int size);
+hash_t strong_hash(const uint8_t *in, int size);
 
 void crypto_init(Crypto *c);
 

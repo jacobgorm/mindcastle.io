@@ -7,11 +7,13 @@
 #define DUBTREE_BLOCK_SIZE 4096ULL /* Disk sector size. */
 
 #define SIMPLETREE_NODESIZE 0x8000 /* Same as Windows' paging unit. */
-#define SIMPLETREE_INNER_M 3275 /* Inner node width, squeezed just below 32kB. */
-#define SIMPLETREE_LEAF_M 1091 /* Leaf node width, squeezed just below 32kB. */
+#define SIMPLETREE_INNER_M 1258 /* Inner node width, squeezed just below 32kB. */
+#define SIMPLETREE_LEAF_M 1090 /* Leaf node width, squeezed just below 32kB. */
 
-typedef struct {
+typedef union {
+    __uint128_t first128;
+    uint64_t first64;
     uint8_t bytes[128 / 8];
-} hash_t;
+}__attribute__((__packed__)) hash_t;
 
 #endif /* __DUBTREE_CONSTANTS_H__ */

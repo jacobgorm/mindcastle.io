@@ -8,11 +8,16 @@
 #include <string.h>
 #include <err.h>
 
+#include "dubtree_constants.h"
 #include "crypto.h"
 
-void strong_hash(uint8_t *hash, const uint8_t *in, int size)
+hash_t strong_hash(const uint8_t *in, int size)
 {
-    SHA512(in, size, hash);
+    uint8_t tmp[512 / 8];
+    hash_t hash;
+    SHA512(in, size, tmp);
+    memcpy(hash.bytes, tmp, sizeof(hash.bytes));
+    return hash;
 }
 
 
