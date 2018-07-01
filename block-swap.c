@@ -71,7 +71,7 @@
 
 #include <lz4.h>
 
-static const uint8_t the_key[16 + 1] = "0123456789abcdef\0";
+static const uint8_t the_key[CRYPTO_KEY_SIZE + 1] = "0123456789abcdef0123456789abcdef\0";
 
 #define LIBIMG
 
@@ -419,7 +419,7 @@ size_t swap_set_key(Crypto *crypto, void *out, uint8_t *hash, const void *in,
         src = tmp;
     }
     memcpy(out, iv, CRYPTO_IV_SIZE);
-    size = CRYPTO_IV_SIZE + encrypt128(crypto, out + CRYPTO_IV_SIZE, hash, src, size, key, iv);
+    size = CRYPTO_IV_SIZE + encrypt256(crypto, out + CRYPTO_IV_SIZE, hash, src, size, key, iv);
     return size;
 }
 
@@ -431,7 +431,7 @@ static inline int swap_get_key(Crypto *crypto, void *out, const void *in, int si
 
     uint8_t tmp[2 * DUBTREE_BLOCK_SIZE];
 
-    size = decrypt128(crypto, tmp, in + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE, hash, the_key, in);
+    size = decrypt256(crypto, tmp, in + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE, hash, the_key, in);
 
     if (size == DUBTREE_BLOCK_SIZE) {
         memcpy(out, tmp, DUBTREE_BLOCK_SIZE);

@@ -1044,8 +1044,7 @@ static inline char *name_chunk(const char *prefix, chunk_id_t chunk_id)
     char h[1 + len];
     hex(h, chunk_id.id.bytes, sizeof(chunk_id.id.bytes));
     h[len] = '\0';
-    //asprintf(&fn, "%s/%s.lvl", prefix, h);
-    asprintf(&fn, "%s/%016lx.lvl", prefix, chunk_id.id.first64);
+    asprintf(&fn, "%s/%s.lvl", prefix, h);
     return fn;
 }
 
@@ -1430,7 +1429,7 @@ out:
 
 static inline int chunk_exceeded(size_t size)
 {
-    return (size + DUBTREE_BLOCK_SIZE - 1 > io_sz);
+    return (size + DUBTREE_BLOCK_SIZE - 1 > (1 << 20));
 }
 
 static inline void insert_kv(SimpleTree *st,

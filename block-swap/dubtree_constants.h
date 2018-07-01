@@ -11,7 +11,6 @@
 #define SIMPLETREE_LEAF_M 1090 /* Leaf node width, squeezed just below 32kB. */
 
 typedef union {
-    __uint128_t first128;
     uint64_t first64;
     uint8_t bytes[128 / 8];
 }__attribute__((__packed__)) hash_t;

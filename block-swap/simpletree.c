@@ -12,7 +12,7 @@
 #if DUBTREE_TREENODES > (1<<16)
 #error "number of tree nodes too large for 16 bits"
 #endif
-static const uint8_t the_key[16 + 1] = "0123456789abcdef\0";
+static const uint8_t the_key[CRYPTO_KEY_SIZE + 1] = "0123456789abcdef0123456789abcdef\0";
 
 static inline node_t alloc_node(SimpleTree *st)
 {
@@ -107,7 +107,7 @@ static void decrypt_node(SimpleTree *st, uint8_t *dst, const uint8_t *src, hash_
 {
     //printf("decrypting with hash %016lx\n", hash.first64);
     assert(hash.first64);
-    decrypt128(&st->crypto, dst, src + CRYPTO_IV_SIZE, SIMPLETREE_NODESIZE -
+    decrypt256(&st->crypto, dst, src + CRYPTO_IV_SIZE, SIMPLETREE_NODESIZE -
             CRYPTO_IV_SIZE, hash.bytes, the_key, src);
 }
 
@@ -324,7 +324,7 @@ static hash_t encrypt_node(SimpleTree *st, node_t n, hash_t next_hash, int depth
     hash_t hash;
     uint8_t *tmp = malloc(SIMPLETREE_NODESIZE);
     RAND_bytes(tmp, CRYPTO_IV_SIZE);
-    encrypt128(&st->crypto, tmp + CRYPTO_IV_SIZE, hash.bytes,
+    encrypt256(&st->crypto, tmp + CRYPTO_IV_SIZE, hash.bytes,
             (uint8_t *) sn, SIMPLETREE_NODESIZE - CRYPTO_IV_SIZE, the_key, tmp);
     memcpy(sn, tmp, SIMPLETREE_NODESIZE);
     free(tmp);

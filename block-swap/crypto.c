@@ -31,8 +31,8 @@ __attribute__((constructor)) static void crypto_global_init(void)
 
 void crypto_init(Crypto *c)
 {
-    if (!(c->cipher = EVP_aes_128_gcm())) {
-        errx(1, "EVP_aes_128_gcm failed");
+    if (!(c->cipher = EVP_aes_256_gcm())) {
+        errx(1, "EVP_aes_256_gcm failed");
     }
     if (!(c->ctx = EVP_CIPHER_CTX_new())) {
         errx(1, "EVP_CIPHER_CTX_new failed");
@@ -42,7 +42,7 @@ void crypto_init(Crypto *c)
     }
 }
 
-int encrypt128(Crypto *crypto, uint8_t *ciphertext, uint8_t *tag,
+int encrypt256(Crypto *crypto, uint8_t *ciphertext, uint8_t *tag,
         const uint8_t *plaintext, int plaintext_len,
         const uint8_t *key, const uint8_t *iv)
 {
@@ -75,7 +75,7 @@ int encrypt128(Crypto *crypto, uint8_t *ciphertext, uint8_t *tag,
     return ciphertext_len;
 }
 
-int decrypt128(Crypto *crypto, uint8_t *plaintext, const uint8_t *ciphertext,
+int decrypt256(Crypto *crypto, uint8_t *plaintext, const uint8_t *ciphertext,
         int ciphertext_len, const uint8_t *tag,
         const uint8_t *key, const uint8_t *iv)
 {
