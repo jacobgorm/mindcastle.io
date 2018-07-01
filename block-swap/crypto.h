@@ -5,11 +5,8 @@
 
 #include "dubtree_constants.h"
 
-#define CRYPTO_IV_SIZE (96 / 8)
-#define CRYPTO_KEY_SIZE (256 / 8)
-#define CRYPTO_TAG_SIZE (128 / 8)
-
 typedef struct Crypto {
+    uint8_t *key;
     const void *cipher;
     void *ctx;
     void *ctx2;
@@ -17,12 +14,12 @@ typedef struct Crypto {
 
 hash_t strong_hash(const uint8_t *in, int size);
 
-void crypto_init(Crypto *c);
+void crypto_init(Crypto *c, uint8_t *key);
 
 int encrypt256(Crypto *c, uint8_t *ciphertext, uint8_t *tag, const uint8_t *plaintext, int plaintext_len,
-        const uint8_t *key, const uint8_t *iv);
+        const uint8_t *iv);
 
 int decrypt256(Crypto *c, uint8_t *plaintext, const uint8_t *ciphertext, int ciphertext_len,
-        const uint8_t *tag, const uint8_t *key, const uint8_t *iv);
+        const uint8_t *tag, const uint8_t *iv);
 
 #endif /* __CRYPTO_H__ */

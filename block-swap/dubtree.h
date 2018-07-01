@@ -9,6 +9,7 @@
 
 #include "dubtree_constants.h"
 #include "cbf.h"
+#include "crypto.h"
 #include "hashtable.h"
 #include "lrucache.h"
 
@@ -43,6 +44,7 @@ typedef struct DubTreeHeader {
     uint32_t dubtree_m;
     uint32_t dubtree_slot_size;
     uint32_t dubtree_max_levels;
+    uint8_t key[CRYPTO_KEY_SIZE];
     chunk_id_t levels[DUBTREE_MAX_LEVELS];
 } DubTreeHeader;
 
@@ -53,7 +55,7 @@ typedef void (*free_callback) (void *opaque, void *ptr);
 typedef struct DubTree {
     critical_section write_lock;
     DubTreeHeader *header;
-    /*volatile*/ chunk_id_t *levels;
+    /*volatile */ chunk_id_t *levels;
 
     char *fallbacks[DUBTREE_MAX_FALLBACKS + 1];
     char *cache;
@@ -69,21 +71,22 @@ typedef struct DubTree {
 
 } DubTree;
 
-int dubtree_insert(DubTree *t, int numKeys, uint64_t* keys, uint8_t *values,
-        uint32_t *sizes, const uint8_t *hashes, int force_level);
+int dubtree_insert(DubTree *t, Crypto *crypto, int numKeys, uint64_t* keys,
+        uint8_t *values, uint32_t *sizes, const uint8_t *hashes,
+        int force_level);
 
 void *dubtree_prepare_find(DubTree *t);
 void dubtree_end_find(DubTree *t, void *ctx);
 
-int dubtree_find(DubTree *t, uint64_t start, int num_keys,
+int dubtree_find(DubTree *t, Crypto *crypto, uint64_t start, int num_keys,
         uint8_t *out, uint8_t *map, uint32_t *sizes, uint8_t *hashes,
         read_callback cb, void *opaque, void *ctx);
 
-int dubtree_init(DubTree *t, char **fallbacks, char *cache,
+int dubtree_init(DubTree *t, Crypto *crypto, char **fallbacks, char *cache,
         malloc_callback malloc_cb, free_callback free_cb, void *opaque);
 void dubtree_close(DubTree *t);
-int dubtree_delete(DubTree *t);
+int dubtree_delete(DubTree *t, Crypto *crypto);
 void dubtree_quiesce(DubTree *t);
-int dubtree_sanity_check(DubTree *t);
+int dubtree_sanity_check(DubTree *t, Crypto *crypto);
 
 #endif /* __DUBTREE_H__ */

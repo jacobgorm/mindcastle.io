@@ -12,8 +12,6 @@
 #if DUBTREE_TREENODES > (1<<16)
 #error "number of tree nodes too large for 16 bits"
 #endif
-static const uint8_t the_key[CRYPTO_KEY_SIZE + 1] = "0123456789abcdef0123456789abcdef\0";
-
 static inline node_t alloc_node(SimpleTree *st)
 {
     SimpleTreeMetaNode *meta = get_meta(st);
@@ -44,16 +42,16 @@ void set_node_type(SimpleTree *st, node_t n,
     put_node(st, n);
 }
 
-static void simpletree_init(SimpleTree *st)
+static void init_tree(SimpleTree *st, Crypto *crypto)
 {
     memset(st->nodes, 0, sizeof(*st));
-    crypto_init(&st->crypto);
+    st->crypto = crypto;
 }
 
-void simpletree_create(SimpleTree *st)
+void simpletree_create(SimpleTree *st, Crypto *crypto)
 {
     assert(st);
-    simpletree_init(st);
+    init_tree(st, crypto);
 
     alloc_node(st);
     set_node_type(st, 0, SimpleTreeNode_Meta);
@@ -76,11 +74,11 @@ void simpletree_close(SimpleTree *st)
     }
 }
 
-void simpletree_open(SimpleTree *st, void *mem, hash_t hash)
+void simpletree_open(SimpleTree *st, Crypto *crypto, void *mem, hash_t hash)
 {
     assert(hash.first64);
     SimpleTreeMetaNode *meta;
-    simpletree_init(st);
+    init_tree(st, crypto);
     st->hash = hash;
     st->mem = mem;
     st->is_encrypted = 1;
@@ -107,8 +105,8 @@ static void decrypt_node(SimpleTree *st, uint8_t *dst, const uint8_t *src, hash_
 {
     //printf("decrypting with hash %016lx\n", hash.first64);
     assert(hash.first64);
-    decrypt256(&st->crypto, dst, src + CRYPTO_IV_SIZE, SIMPLETREE_NODESIZE -
-            CRYPTO_IV_SIZE, hash.bytes, the_key, src);
+    decrypt256(st->crypto, dst, src + CRYPTO_IV_SIZE, SIMPLETREE_NODESIZE -
+            CRYPTO_IV_SIZE, hash.bytes, src);
 }
 
 void *simpletree_get_node(SimpleTree *st, node_t n, hash_t hash)
@@ -324,8 +322,8 @@ static hash_t encrypt_node(SimpleTree *st, node_t n, hash_t next_hash, int depth
     hash_t hash;
     uint8_t *tmp = malloc(SIMPLETREE_NODESIZE);
     RAND_bytes(tmp, CRYPTO_IV_SIZE);
-    encrypt256(&st->crypto, tmp + CRYPTO_IV_SIZE, hash.bytes,
-            (uint8_t *) sn, SIMPLETREE_NODESIZE - CRYPTO_IV_SIZE, the_key, tmp);
+    encrypt256(st->crypto, tmp + CRYPTO_IV_SIZE, hash.bytes,
+            (uint8_t *) sn, SIMPLETREE_NODESIZE - CRYPTO_IV_SIZE, tmp);
     memcpy(sn, tmp, SIMPLETREE_NODESIZE);
     free(tmp);
 

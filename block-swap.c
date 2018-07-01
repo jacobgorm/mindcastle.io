@@ -71,7 +71,8 @@
 
 #include <lz4.h>
 
-static const uint8_t the_key[CRYPTO_KEY_SIZE + 1] = "0123456789abcdef0123456789abcdef\0";
+/* Actual key will get filled in by dubtree_init() */
+static uint8_t the_key[CRYPTO_KEY_SIZE] = {};
 
 #define LIBIMG
 
@@ -333,7 +334,7 @@ typedef struct BDRVSwapState {
     int log_swap_fills;
     int store_uncompressed;
 
-    Crypto inline_crypto, read_crypto, write_crypto;
+    Crypto inline_crypto, read_crypto, write_crypto, insert_crypto;
 
 #ifdef _WIN32
     HANDLE heap;
@@ -397,7 +398,7 @@ static void *swap_read_thread(void *_s);
 
 static inline
 size_t swap_set_key(Crypto *crypto, void *out, uint8_t *hash, const void *in,
-        const uint8_t *key, const uint8_t *iv)
+        const uint8_t *iv)
 {
     /* Caller has allocated ample space for compression overhead, so we don't
      * worry about about running out of space. However, there is no point in
@@ -419,7 +420,7 @@ size_t swap_set_key(Crypto *crypto, void *out, uint8_t *hash, const void *in,
         src = tmp;
     }
     memcpy(out, iv, CRYPTO_IV_SIZE);
-    size = CRYPTO_IV_SIZE + encrypt256(crypto, out + CRYPTO_IV_SIZE, hash, src, size, key, iv);
+    size = CRYPTO_IV_SIZE + encrypt256(crypto, out + CRYPTO_IV_SIZE, hash, src, size, iv);
     return size;
 }
 
@@ -431,7 +432,7 @@ static inline int swap_get_key(Crypto *crypto, void *out, const void *in, int si
 
     uint8_t tmp[2 * DUBTREE_BLOCK_SIZE];
 
-    size = decrypt256(crypto, tmp, in + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE, hash, the_key, in);
+    size = decrypt256(crypto, tmp, in + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE, hash, in);
 
     if (size == DUBTREE_BLOCK_SIZE) {
         memcpy(out, tmp, DUBTREE_BLOCK_SIZE);
@@ -593,7 +594,8 @@ swap_insert_thread(void * _s)
         int i;
         uint32_t load;
 
-        r = dubtree_insert(&s->t, n, keys, cbuf, c->sizes, c->hashes, 0);
+        r = dubtree_insert(&s->t, &s->insert_crypto, n, keys, cbuf,
+                c->sizes, c->hashes, 0);
         free(c->sizes);
 
         swap_lock(s);
@@ -773,7 +775,7 @@ wait:
             uint8_t *hash = hashes + CRYPTO_TAG_SIZE * n;
             uint8_t *iv = ivs + CRYPTO_IV_SIZE * n;
             RAND_bytes(iv, CRYPTO_IV_SIZE);
-            size = swap_set_key(&s->write_crypto, cbuf + total_size, hash, ptr, the_key, iv);
+            size = swap_set_key(&s->write_crypto, cbuf + total_size, hash, ptr, iv);
         }
 
         swap_lock(s);
@@ -1194,7 +1196,13 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
         }
     }
 
-    if (dubtree_init(&s->t, s->fallbacks, s->cache, swap_malloc, swap_free, s) != 0) {
+    crypto_init(&s->inline_crypto, the_key);
+    crypto_init(&s->read_crypto, the_key);
+    crypto_init(&s->write_crypto, the_key);
+    crypto_init(&s->insert_crypto, the_key);
+
+    if (dubtree_init(&s->t, &s->write_crypto, s->fallbacks, s->cache,
+                swap_malloc, swap_free, s) != 0) {
         warn("swap: failed to init dubtree");
         r = -1;
         goto out;
@@ -1236,10 +1244,6 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
         warn("swap: unable to create lrucache for blocks");
         return -1;
     }
-
-    crypto_init(&s->inline_crypto);
-    crypto_init(&s->read_crypto);
-    crypto_init(&s->write_crypto);
 
     for (i = 0; i < 2; ++i) {
         pq_init(&s->pqs[i]);
@@ -1306,7 +1310,7 @@ out:
 {
     int r;
     BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
-    dubtree_delete(&s->t);
+    dubtree_delete(&s->t, &s->inline_crypto);
     r = unlink(s->filename);
     if (r < 0) {
         debug_printf("swap: unable to unlink %s\n", s->filename);
@@ -2049,8 +2053,8 @@ static int __swap_dubtree_read(BDRVSwapState *s, SwapAIOCB *acb)
     }
 
     do {
-        r = dubtree_find(&s->t, start, end - start, decomp, map, sizes,
-                acb->hashes,
+        r = dubtree_find(&s->t, &s->inline_crypto, start, end - start, decomp,
+                map, sizes, acb->hashes,
                 dubtree_read_complete_cb, acb, s->find_context);
     } while (r == -EAGAIN);
 

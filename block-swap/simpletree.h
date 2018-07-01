@@ -6,7 +6,6 @@
 #include "crypto.h"
 #include "hashtable.h"
 #include "lrucache.h"
-#include "crypto.h"
 
 typedef uint32_t node_t;
 
@@ -34,7 +33,7 @@ typedef struct SimpleTree {
     hash_t hash;
     hash_t first_hash;
     hash_t tmp_hash;
-    Crypto crypto;
+    Crypto *crypto;
     int is_encrypted;
     LruCache lru;
     HashTable ht;
@@ -95,7 +94,7 @@ typedef struct SimpleTreeNode {
     } u;
 } SimpleTreeNode;
 
-void simpletree_create(SimpleTree *st);
+void simpletree_create(SimpleTree *st, Crypto *crypto);
 void *simpletree_get_node(SimpleTree *st, node_t n, hash_t hash);
 void simpletree_put_node(SimpleTree *st, node_t n);
 
@@ -105,7 +104,7 @@ void simpletree_finish(SimpleTree *st);
 hash_t simpletree_encrypt(SimpleTree *st);
 int simpletree_find(SimpleTree *st, uint64_t key, SimpleTreeIterator *it);
 
-void simpletree_open(SimpleTree *st, void *mem, hash_t hash);
+void simpletree_open(SimpleTree *st, Crypto *crypto, void *mem, hash_t hash);
 void simpletree_set_user(SimpleTree *st, const void *data, size_t size);
 const void *simpletree_get_user(SimpleTree *st);
 
