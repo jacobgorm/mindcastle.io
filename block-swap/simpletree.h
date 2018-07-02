@@ -26,8 +26,8 @@ typedef struct SimpleTreeMetaNode {
 typedef struct SimpleTree {
     node_t nodes[16];
     node_t prev;
-    int fd;
     uint8_t *mem;
+    int fd;
     uint8_t *node_buf;
     uint8_t *user_data;
     uint64_t size;
@@ -105,7 +105,7 @@ void simpletree_finish(SimpleTree *st);
 hash_t simpletree_encrypt(SimpleTree *st);
 int simpletree_find(SimpleTree *st, uint64_t key, SimpleTreeIterator *it);
 
-void simpletree_open(SimpleTree *st, Crypto *crypto, void *mem, hash_t hash);
+void simpletree_open(SimpleTree *st, Crypto *crypto, int fd, hash_t hash);
 void simpletree_set_user(SimpleTree *st, const void *data, size_t size);
 const void *simpletree_get_user(SimpleTree *st);
 
@@ -195,7 +195,6 @@ static inline int simpletree_at_end(SimpleTree *st, SimpleTreeIterator *it)
 static inline SimpleTreeResult simpletree_read(SimpleTree *st,
         SimpleTreeIterator *it)
 {
-    assert(st->mem);
     SimpleTreeResult r;
     node_t n = it->node;
     const SimpleTreeLeafNode *ln = &get_node_hash(st, n, it->hash)->u.ln;

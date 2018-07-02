@@ -630,24 +630,23 @@ static inline void unmap_file(void *mem, size_t size)
 #endif
 }
 
-static void *__map_chunk(DubTree *t, chunk_id_t chunk_id)
+static int __get_chunk_fd(DubTree *t, chunk_id_t chunk_id)
 {
     int line = -1;
     dubtree_handle_t f = __get_chunk(t, chunk_id, 0, 1, &line);
     if (invalid_handle(f)) {
         assert(0);
-        return NULL;
+        return -1;
     }
-    void *r = map_file(f, chunk_id.size, 0);
+    int r = dup(f->fd);
     __put_chunk(t, line);
     return r;
 }
 
-static void *map_chunk(DubTree *t, chunk_id_t chunk_id)
+static int get_chunk_fd(DubTree *t, chunk_id_t chunk_id)
 {
-    void *r;
     critical_section_enter(&t->cache_lock);
-    r = __map_chunk(t, chunk_id);
+    int r = __get_chunk_fd(t, chunk_id);
     critical_section_leave(&t->cache_lock);
     return r;
 }
@@ -699,7 +698,7 @@ static int populate_cbf(DubTree *t, Crypto *crypto, int n)
     for (int i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
         if (valid_chunk_id(&t->levels[i])) {
             const UserData *cud;
-            simpletree_open(&trees[i], crypto, map_chunk(t, t->levels[i]),
+            simpletree_open(&trees[i], crypto, get_chunk_fd(t, t->levels[i]),
                     t->levels[i].id);
             cud = simpletree_get_user(&trees[i]);
             n += cud->num_chunks;
@@ -852,7 +851,7 @@ int dubtree_find(DubTree *t, Crypto *crypto, uint64_t start, int num_keys,
         if (!valid_chunk_id(&ct->chunk) && valid_chunk_id(&t->levels[i])) {
             ct->chunk = t->levels[i];
             simpletree_open(&ct->st, crypto,
-                    __map_chunk(t, ct->chunk), ct->chunk.id);
+                    __get_chunk_fd(t, ct->chunk), ct->chunk.id);
         }
     }
     critical_section_leave(&t->cache_lock);
@@ -1495,7 +1494,7 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
             existing = &trees[i];
 
             simpletree_open(existing, crypto,
-                    map_chunk(t, t->levels[i]), t->levels[i].id);
+                    get_chunk_fd(t, t->levels[i]), t->levels[i].id);
 
             cud = simpletree_get_user(existing);
             used = cud->size;
@@ -1824,7 +1823,7 @@ int dubtree_delete(DubTree *t, Crypto *crypto)
 
             SimpleTree st;
             const UserData *cud;
-            simpletree_open(&st, crypto, map_chunk(t, chunk_id), chunk_id.id);
+            simpletree_open(&st, crypto, get_chunk_fd(t, chunk_id), chunk_id.id);
 
             cud = simpletree_get_user(&st);
             for (j = 0; j < cud->num_chunks; ++j) {
@@ -1909,7 +1908,7 @@ int dubtree_sanity_check(DubTree *t, Crypto *crypto)
             const UserData *cud;
 
             printf("get level %d\n", i);
-            simpletree_open(&st, crypto, map_chunk(t, t->levels[i]), t->levels[i].id);
+            simpletree_open(&st, crypto, get_chunk_fd(t, t->levels[i]), t->levels[i].id);
             simpletree_begin(&st, &it);
             cud = simpletree_get_user(&st);
             printf("check level %d\n", i);

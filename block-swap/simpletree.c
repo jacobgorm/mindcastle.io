@@ -46,6 +46,7 @@ static void init_tree(SimpleTree *st, Crypto *crypto)
 {
     memset(st->nodes, 0, sizeof(*st));
     st->crypto = crypto;
+    st->fd = -1;
     st->node_buf = malloc(SIMPLETREE_NODESIZE);
 }
 
@@ -74,17 +75,21 @@ void simpletree_close(SimpleTree *st)
         hashtable_clear(&st->ht);
         free(st->cached_nodes);
     }
+    if (st->fd >= 0) {
+        close(st->fd);
+    }
 }
 
-void simpletree_open(SimpleTree *st, Crypto *crypto, void *mem, hash_t hash)
+void simpletree_open(SimpleTree *st, Crypto *crypto, int fd, hash_t hash)
 {
     assert(hash.first64);
     SimpleTreeMetaNode *meta;
     init_tree(st, crypto);
     st->hash = hash;
-    st->mem = mem;
+    st->mem = NULL;
+    st->fd = fd;
     st->is_encrypted = 1;
-    const int log_lines = 4;
+    const int log_lines = 6;
     lru_cache_init(&st->lru, log_lines);
     hashtable_init(&st->ht, NULL, NULL);
     st->cached_nodes = malloc(SIMPLETREE_NODESIZE * (1 << log_lines));
@@ -111,6 +116,25 @@ static void decrypt_node(SimpleTree *st, uint8_t *dst, const uint8_t *src, hash_
             CRYPTO_IV_SIZE, hash.bytes, src);
 }
 
+static int buffer_node(SimpleTree *st, node_t n)
+{
+    int left = SIMPLETREE_NODESIZE;
+    int offset = 0;
+    while (left) {
+        ssize_t r;
+        do {
+            r = pread(st->fd, st->node_buf + offset, left,
+                    SIMPLETREE_NODESIZE * n + offset);
+        } while (r < 0 && errno == EINTR);
+        if (r < 0) {
+            err(1, "unable to read node %u", n);
+        }
+        left -= r;
+        offset += r;
+    }
+    return 0;
+}
+
 void *simpletree_get_node(SimpleTree *st, node_t n, hash_t hash)
 {
     uint64_t line;
@@ -133,8 +157,8 @@ void *simpletree_get_node(SimpleTree *st, node_t n, hash_t hash)
             hashtable_delete(&st->ht, cl->key);
         }
         ptr = st->cached_nodes + SIMPLETREE_NODESIZE * line;
-        void *src = ((uint8_t*) st->mem + SIMPLETREE_NODESIZE * n);
-        decrypt_node(st, ptr, src, hash);
+        buffer_node(st, n);
+        decrypt_node(st, ptr, st->node_buf, hash);
         cl->key = n;
         cl->value = (uintptr_t) ptr;
         cl->users = 1;
