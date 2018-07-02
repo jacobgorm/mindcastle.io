@@ -46,6 +46,7 @@ static void init_tree(SimpleTree *st, Crypto *crypto)
 {
     memset(st->nodes, 0, sizeof(*st));
     st->crypto = crypto;
+    st->node_buf = malloc(SIMPLETREE_NODESIZE);
 }
 
 void simpletree_create(SimpleTree *st, Crypto *crypto)
@@ -67,6 +68,7 @@ void simpletree_close(SimpleTree *st)
 {
     free(st->mem);
     free(st->user_data);
+    free(st->node_buf);
     if (st->is_encrypted) {
         lru_cache_close(&st->lru);
         hashtable_clear(&st->ht);
@@ -320,12 +322,11 @@ static hash_t encrypt_node(SimpleTree *st, node_t n, hash_t next_hash, int depth
     }
 
     hash_t hash;
-    uint8_t *tmp = malloc(SIMPLETREE_NODESIZE);
+    uint8_t *tmp = st->node_buf;
     RAND_bytes(tmp, CRYPTO_IV_SIZE);
     encrypt256(st->crypto, tmp + CRYPTO_IV_SIZE, hash.bytes,
             (uint8_t *) sn, SIMPLETREE_NODESIZE - CRYPTO_IV_SIZE, tmp);
     memcpy(sn, tmp, SIMPLETREE_NODESIZE);
-    free(tmp);
 
     if (type == SimpleTreeNode_Leaf) {
         st->first_hash = hash;

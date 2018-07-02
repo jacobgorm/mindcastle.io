@@ -28,6 +28,7 @@ typedef struct SimpleTree {
     node_t prev;
     int fd;
     uint8_t *mem;
+    uint8_t *node_buf;
     uint8_t *user_data;
     uint64_t size;
     hash_t hash;
