@@ -61,8 +61,6 @@ int encrypt256(Crypto *crypto, uint8_t *ciphertext, uint8_t *tag,
         errx(1, "EVP_EncryptFinal_ex failed");
     }
 
-    EVP_CIPHER_CTX_reset(ctx);
-
     return ciphertext_len;
 }
 
@@ -93,8 +91,6 @@ int decrypt256(Crypto *crypto, uint8_t *plaintext, const uint8_t *ciphertext,
         errx(1, "EVP_DecryptFinal_ex failed, r=%d", r);
     }
     plaintext_len += len;
-
-    EVP_CIPHER_CTX_reset(ctx);
 
     return plaintext_len;
 }

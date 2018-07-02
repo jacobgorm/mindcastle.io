@@ -1089,7 +1089,7 @@ static chunk_id_t content_id(const uint8_t *in, int size)
     chunk_id_t chunk_id;
     chunk_id.size = size;
 
-#if 0
+#if 1
     SHA512(in, size, chunk_id.id.bytes);
 #else
     unsigned int len;
