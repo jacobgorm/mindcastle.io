@@ -2039,7 +2039,7 @@ static int __swap_dubtree_read(BDRVSwapState *s, SwapAIOCB *acb)
     acb->sizes = sizes;
     acb->hashes = malloc(CRYPTO_TAG_SIZE * (end - start));
 
-    decomp = malloc(DUBTREE_BLOCK_SIZE * (end - start));
+    decomp = malloc((CRYPTO_IV_SIZE + DUBTREE_BLOCK_SIZE) * (end - start));
     if (!decomp) {
         errx(1, "OOM error %s line %d", __FUNCTION__, __LINE__);
     }
