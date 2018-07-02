@@ -11,10 +11,12 @@
 
 __attribute__((constructor)) static void crypto_global_init(void)
 {
-    printf("loading random seed...\n");
+    printf("loading random seed... ");
+    fflush(stdout);
     if (RAND_load_file("/dev/random", 32) != 32) {
         errx(1, "RAND_load_file failed");
     }
+    printf(" done.\n");
 }
 
 void crypto_init(Crypto *crypto, uint8_t *key)
