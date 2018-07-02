@@ -183,6 +183,8 @@ int dubtree_init(DubTree *t, Crypto *crypto,
 
     if (!t->header->magic) {
 
+        fprintf(stderr, "*** creating empty dubtree ****\n");
+
         for (i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
             clear_chunk_id(&t->levels[i]);
         }
