@@ -1,3 +1,8 @@
+keep global version counter and tag each IO with it
+on a read or a merge-clobber, only make write visible when
+past global revision
+
+
 delete chunks under cache/
 ability to save named checkpoint, via command channel?
 
