@@ -12,8 +12,6 @@ typedef struct Crypto {
     void *ctx2;
 } Crypto;
 
-hash_t strong_hash(const uint8_t *in, int size);
-
 void crypto_init(Crypto *c, uint8_t *key);
 
 int encrypt256(Crypto *c, uint8_t *ciphertext, uint8_t *tag, const uint8_t *plaintext, int plaintext_len,

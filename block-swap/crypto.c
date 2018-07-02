@@ -1,6 +1,5 @@
 #include <assert.h>
 #include <openssl/aes.h>
-#include <openssl/sha.h>
 #include <openssl/conf.h>
 #include <openssl/evp.h>
 #include <openssl/err.h>
@@ -8,18 +7,7 @@
 #include <string.h>
 #include <err.h>
 
-#include "dubtree_constants.h"
 #include "crypto.h"
-
-hash_t strong_hash(const uint8_t *in, int size)
-{
-    uint8_t tmp[512 / 8];
-    hash_t hash;
-    SHA512(in, size, tmp);
-    memcpy(hash.bytes, tmp, sizeof(hash.bytes));
-    return hash;
-}
-
 
 __attribute__((constructor)) static void crypto_global_init(void)
 {

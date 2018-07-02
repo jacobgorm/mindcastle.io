@@ -19,7 +19,10 @@
 /* The per-instance in-memory representation of a dubtree. */
 
 typedef struct {
-    hash_t id;
+    union {
+        uint64_t first64;
+        uint8_t bytes[512 / 8];
+    } id;
     uint32_t size;
 } chunk_id_t;
 
@@ -46,6 +49,7 @@ typedef struct DubTreeHeader {
     uint32_t dubtree_max_levels;
     uint8_t key[CRYPTO_KEY_SIZE];
     chunk_id_t levels[DUBTREE_MAX_LEVELS];
+    hash_t hashes[DUBTREE_MAX_LEVELS];
 } DubTreeHeader;
 
 typedef void (*read_callback) (void *opaque, int result);
@@ -56,6 +60,7 @@ typedef struct DubTree {
     critical_section write_lock;
     DubTreeHeader *header;
     /*volatile */ chunk_id_t *levels;
+    /*volatile */ hash_t *hashes;
 
     char *fallbacks[DUBTREE_MAX_FALLBACKS + 1];
     char *cache;

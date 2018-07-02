@@ -15,6 +15,8 @@
 #include <curl/curl.h>
 #include <curl/easy.h>
 #include <openssl/rand.h>
+#include <openssl/sha.h>
+#include <openssl/evp.h>
 
 #define DUBTREE_FILE_MAGIC_MMAP 0x73776170
 
@@ -146,6 +148,7 @@ int dubtree_init(DubTree *t, Crypto *crypto,
     header = m;
     t->header = header;
     t->levels = header->levels;
+    t->hashes = header->hashes;
 
     if (!t->header->magic) {
 
@@ -699,7 +702,7 @@ static int populate_cbf(DubTree *t, Crypto *crypto, int n)
         if (valid_chunk_id(&t->levels[i])) {
             const UserData *cud;
             simpletree_open(&trees[i], crypto, get_chunk_fd(t, t->levels[i]),
-                    t->levels[i].id);
+                    t->hashes[i]);
             cud = simpletree_get_user(&trees[i]);
             n += cud->num_chunks;
         }
@@ -851,7 +854,7 @@ int dubtree_find(DubTree *t, Crypto *crypto, uint64_t start, int num_keys,
         if (!valid_chunk_id(&ct->chunk) && valid_chunk_id(&t->levels[i])) {
             ct->chunk = t->levels[i];
             simpletree_open(&ct->st, crypto,
-                    __get_chunk_fd(t, ct->chunk), ct->chunk.id);
+                    __get_chunk_fd(t, ct->chunk), t->hashes[i]);
         }
     }
     critical_section_leave(&t->cache_lock);
@@ -1079,6 +1082,40 @@ static void close_chunk_file(dubtree_handle_t f)
     dubtree_close_file(f);
 }
 
+static chunk_id_t content_id(const uint8_t *in, int size)
+{
+    chunk_id_t chunk_id;
+    chunk_id.size = size;
+
+#if 0
+    SHA512(in, size, chunk_id.id.bytes);
+#else
+    unsigned int len;
+
+    EVP_MD_CTX *mdctx;
+
+    if((mdctx = EVP_MD_CTX_create()) == NULL) {
+        errx(1, "EVP_MD_CTX_create failed");
+    }
+
+    if(1 != EVP_DigestInit_ex(mdctx, EVP_blake2b512(), NULL)) {
+        errx(1, "EVP_DigestInit_ex failed");
+    }
+
+    if(1 != EVP_DigestUpdate(mdctx, in, size)) {
+        errx(1, "EVP_DigestUpdate failed");
+    }
+
+    if(1 != EVP_DigestFinal_ex(mdctx, chunk_id.id.bytes, &len)) {
+        errx(1, "EVP_DigestFinal_ex failed");
+    }
+
+    EVP_MD_CTX_destroy(mdctx);
+#endif
+    return chunk_id;
+}
+
+
 static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
 {
     HttpGetState *hgs = opaque;
@@ -1105,19 +1142,25 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
 
     if ((hgs->offset == hgs->size)) {
         fprintf(stderr, "%p %.2fMiB/s\n", hgs, (double) (hgs->size) / (1024.0 * 1024.0 * (rtc() - hgs->t0)));
+        void *b = hgs->buffer;
         char procfn[32];
         sprintf(procfn, "/proc/self/fd/%d", hgs->fd);
-        char *fn = name_chunk(t->cache, hgs->chunk_id);
-        int r = linkat(AT_FDCWD, procfn, AT_FDCWD, fn, AT_SYMLINK_FOLLOW);
-        close(hgs->fd);
-        if (r < 0 && errno != EEXIST) {
-            err(1, "linkat failed for %d -> %s", hgs->fd, fn);
+        chunk_id_t real_id = content_id(b, hgs->chunk_id.size);
+
+        if (equal_chunk_ids(&real_id, &hgs->chunk_id)) {
+            char *fn = name_chunk(t->cache, hgs->chunk_id);
+            int r = linkat(AT_FDCWD, procfn, AT_FDCWD, fn, AT_SYMLINK_FOLLOW);
+            close(hgs->fd);
+            if (r < 0 && errno != EEXIST) {
+                err(1, "linkat failed for %d -> %s", hgs->fd, fn);
+            }
+            free(fn);
         }
-        free(fn);
-        void *b = hgs->buffer;
         hgs->buffer = NULL;
         unmap_file(b, hgs->size);
         hgs_deref(hgs);
+    } else {
+        fprintf(stderr, "chunk damaged in transmit, not caching!!\n");
     }
     return size * nmemb;
 }
@@ -1401,8 +1444,7 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
         err(1, "pipe read failed");
     }
     close(fds[0]);
-    chunk_id.id = strong_hash(c->buf, size);
-    chunk_id.size = size;
+    chunk_id = content_id(c->buf, size);
     dubtree_handle_t f = get_chunk(t, chunk_id, 1, 0, &l);
     if (invalid_handle(f)) {
         if (errno == EEXIST) {
@@ -1494,7 +1536,7 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
             existing = &trees[i];
 
             simpletree_open(existing, crypto,
-                    get_chunk_fd(t, t->levels[i]), t->levels[i].id);
+                    get_chunk_fd(t, t->levels[i]), t->hashes[i]);
 
             cud = simpletree_get_user(existing);
             used = cud->size;
@@ -1754,8 +1796,8 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
 
     chunk_id_t tree_chunk;
     uint32_t tree_size = simpletree_get_nodes_size(&st);
-    tree_chunk.id = simpletree_encrypt(&st);
-    tree_chunk.size = tree_size;
+    tree_chunk = content_id(st.mem, tree_size);
+    hash_t tree_hash = simpletree_encrypt(&st);
     int l;
     dubtree_handle_t f = get_chunk(t, tree_chunk, 1, 0, &l);
     if (invalid_handle(f)) {
@@ -1786,6 +1828,7 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
         // XXX XXX no longer atomic!
         if (dest == j) {
             t->levels[j] = tree_chunk;
+            t->hashes[j] = tree_hash;
         } else {
             clear_chunk_id(&t->levels[j]);
         }
@@ -1823,7 +1866,8 @@ int dubtree_delete(DubTree *t, Crypto *crypto)
 
             SimpleTree st;
             const UserData *cud;
-            simpletree_open(&st, crypto, get_chunk_fd(t, chunk_id), chunk_id.id);
+            simpletree_open(&st, crypto, get_chunk_fd(t, chunk_id),
+                    t->hashes[i]);
 
             cud = simpletree_get_user(&st);
             for (j = 0; j < cud->num_chunks; ++j) {
@@ -1908,7 +1952,7 @@ int dubtree_sanity_check(DubTree *t, Crypto *crypto)
             const UserData *cud;
 
             printf("get level %d\n", i);
-            simpletree_open(&st, crypto, get_chunk_fd(t, t->levels[i]), t->levels[i].id);
+            simpletree_open(&st, crypto, get_chunk_fd(t, t->levels[i]), t->hashes[i]);
             simpletree_begin(&st, &it);
             cud = simpletree_get_user(&st);
             printf("check level %d\n", i);
