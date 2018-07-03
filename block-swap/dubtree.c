@@ -1048,10 +1048,9 @@ static inline void sift_down(DubTree *t, HeapElem **hp, size_t end)
 static inline char *name_chunk(const char *prefix, chunk_id_t chunk_id)
 {
     char *fn;
-    const size_t len = 2 * sizeof(chunk_id.id);
-    char h[1 + len];
-    hex(h, chunk_id.id.bytes, sizeof(chunk_id.id.bytes));
-    h[len] = '\0';
+    char h[33];
+    hex(h, chunk_id.id.bytes, 16); // shorten to 128 bits, too painful otherwise
+    h[32] = '\0';
     asprintf(&fn, "%s/%s.lvl", prefix, h);
     return fn;
 }
