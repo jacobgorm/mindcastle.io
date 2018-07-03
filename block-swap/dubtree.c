@@ -316,6 +316,16 @@ typedef struct CallbackState {
     int result;
 } CallbackState;
 
+typedef struct DecryptState {
+    read_callback cb;
+    void *opaque;
+    uint8_t *buffer;
+    int num_keys;
+    uint32_t *sizes;
+    Crypto *crypto;
+    uint8_t *hashes;
+} DecryptState;
+
 static inline
 void increment_counter(CallbackState *cs)
 {
@@ -331,6 +341,25 @@ void decrement_counter(CallbackState *cs)
         }
         free(cs);
     }
+}
+
+static void decrypt_read(void *opaque, int result)
+{
+    DecryptState *ds = opaque;
+    const uint8_t *hash = ds->hashes;
+    uint8_t *dst = ds->buffer;
+    const uint8_t *src = ds->buffer;
+    for (int i = 0; i < ds->num_keys; ++i, hash += CRYPTO_TAG_SIZE) {
+        int size = ds->sizes[i];
+        uint8_t tmp[DUBTREE_BLOCK_SIZE];
+        ds->sizes[i] = decrypt256(ds->crypto, tmp, src + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE, hash, src);
+        memcpy(dst, tmp, size);
+        src += size;
+        dst += ds->sizes[i];
+    }
+    free(ds->hashes);
+    ds->cb(ds->opaque, result);
+    free(ds);
 }
 
 #ifdef _WIN32
@@ -773,7 +802,7 @@ void dubtree_end_find(DubTree *t, void *ctx)
 }
 
 int dubtree_find(DubTree *t, Crypto *crypto, uint64_t start, int num_keys,
-        uint8_t *out, uint8_t *map, uint32_t *sizes, uint8_t *hashes,
+        uint8_t *buffer, uint8_t *map, uint32_t *sizes,
         read_callback cb, void *opaque, void *ctx)
 {
     int i, r;
@@ -790,6 +819,7 @@ int dubtree_find(DubTree *t, Crypto *crypto, uint64_t start, int num_keys,
     uint8_t *versions = NULL;
     int succeeded;
     int missing;
+    uint8_t *hashes = malloc(num_keys * sizeof(hash_t));
 
     FindContext *fx = ctx;
     char relevant[DUBTREE_MAX_LEVELS] = {};
@@ -815,19 +845,19 @@ int dubtree_find(DubTree *t, Crypto *crypto, uint64_t start, int num_keys,
         versions = inline_versions;
     }
 
+    DecryptState *ds = calloc(1, sizeof(DecryptState));
     CallbackState *cs = calloc(1, sizeof(CallbackState));
-    if (cb) {
-        cs->cb = cb;
-        cs->opaque = opaque;
-    } else {
-        cs->cb = set_event_cb;
-#ifdef _WIN32
-        cs->opaque = (void *) fx->event;
-#else
-        cs->opaque = NULL;
-#endif
+    assert(cb);
+    ds->cb = cb;
+    ds->opaque = opaque;
+    ds->sizes = sizes;
+    ds->buffer = buffer;
+    ds->num_keys = num_keys;
+    ds->crypto = crypto;
+    ds->hashes = hashes;
 
-    }
+    cs->cb = decrypt_read;
+    cs->opaque = ds;
     increment_counter(cs);
 
     succeeded = 1; // so far so good.
@@ -906,7 +936,7 @@ int dubtree_find(DubTree *t, Crypto *crypto, uint64_t start, int num_keys,
 
     /* Copy out the values we found. */
     Chunk c = {};
-    c.buf = out;
+    c.buf = buffer;
     hashtable_init(&c.ht, NULL, NULL);
 
     int dst;
@@ -1487,7 +1517,7 @@ static inline void insert_kv(SimpleTree *st,
 }
 
 int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
-        uint8_t *values, uint32_t *sizes, const uint8_t *hashes,
+        uint8_t *values, uint32_t *sizes,
         int force_level)
 {
     /* Find a free slot at the top level and copy the key there. */
@@ -1514,6 +1544,25 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
     struct buf_elem {uint64_t key; int offset; int size; hash_t hash;};
     struct buf_elem *buffered = t->buffered;
 
+
+    int total_size = 0;
+    for (i = 0; i < num_keys; ++i) {
+        total_size += CRYPTO_IV_SIZE + sizes[i];
+    }
+    uint8_t *encrypted_values = malloc(total_size);
+    uint8_t *enc = encrypted_values;
+    uint8_t *hashes = malloc(CRYPTO_TAG_SIZE * num_keys);
+    uint8_t *hash = hashes;
+    const uint8_t *v = values;
+    for (i = 0; i < num_keys; ++i, hash += CRYPTO_TAG_SIZE) {
+        int size = sizes[i];
+        RAND_bytes(enc, CRYPTO_IV_SIZE);
+        sizes[i] = CRYPTO_IV_SIZE + encrypt256(crypto, enc + CRYPTO_IV_SIZE,
+                hash, v, size, enc);
+        v += size;
+        enc += sizes[i];
+    }
+ 
     if (num_keys > 0) {
         for (i = 0; i < num_keys; ++i) {
             needed += sizes[i];
@@ -1672,7 +1721,7 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
                         read_chunk(t, out, last_chunk_id, b0, offset0, b - b0);
                         offset0 = e->offset + e->size;
 
-                        out_id = write_chunk(t, out, values, b);
+                        out_id = write_chunk(t, out, encrypted_values, b);
                         set_chunk_id(ud, out_chunk, out_id);
                         out_chunk = -1;
                         out = NULL;
@@ -1688,7 +1737,7 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
         }
         if (done) {
             if (out) {
-                out_id = write_chunk(t, out, values, b);
+                out_id = write_chunk(t, out, encrypted_values, b);
                 set_chunk_id(ud, out_chunk, out_id);
                 out_chunk = -1;
                 out = NULL;
@@ -1852,6 +1901,8 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
     critical_section_leave(&t->cache_lock);
     critical_section_leave(&t->write_lock);
     free(deref);
+    free(hashes);
+    free(encrypted_values);
 
     return 0;
 }

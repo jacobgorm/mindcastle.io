@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <err.h>
 
 #ifndef O_NOATIME
 #define O_NOATIME 01000000
@@ -169,11 +170,21 @@ int dubtree_pread(dubtree_handle_t f, void *buf, size_t sz, uint64_t offset)
     }
     return (int) got;
 #else
-    int r;
-    do {
-        r = pread(f->fd, buf, sz, offset);
-    } while (r < 0 && errno == EINTR);
-    return r;
+
+    uint8_t *b = buf;
+    int left = sz;
+    while (left) {
+        ssize_t r;
+        do {
+            r = pread(f->fd, b + offset, left, offset);
+        } while (r < 0 && errno == EINTR);
+        if (r < 0) {
+            err(1, "pread failed");
+        }
+        left -= r;
+        offset += r;
+    }
+    return sz;
 #endif
 }
 
@@ -200,11 +211,22 @@ dubtree_pwrite(dubtree_handle_t f, const void *buf, size_t sz, uint64_t offset)
     }
     return (int) wrote;
 #else
-    int r;
-    do {
-        r = pwrite(f->fd, buf, sz, offset);
-    } while (r < 0 && errno == EINTR);
-    return (r == sz) ? r : -1;
+
+    const uint8_t *b = buf;
+    int left = sz;
+    while (left) {
+        ssize_t r;
+        do {
+            r = pwrite(f->fd, b + offset, left, offset);
+        } while (r < 0 && errno == EINTR);
+        if (r < 0) {
+            err(1, "pwrite failed");
+        }
+        left -= r;
+        offset += r;
+    }
+    return sz;
+
 #endif
 }
 
