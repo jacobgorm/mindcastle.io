@@ -1158,7 +1158,7 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
             }
             free(fn);
         } else {
-            fprintf(stderr, "chunk damaged in transmit, not caching!!\n");
+            fprintf(stderr, "chunk damaged in transit, not caching!!\n");
         }
 
         hgs->buffer = NULL;
@@ -1797,10 +1797,9 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
     free(ud);
 
 
-    chunk_id_t tree_chunk;
     uint32_t tree_size = simpletree_get_nodes_size(&st);
-    tree_chunk = content_id(st.mem, tree_size);
     hash_t tree_hash = simpletree_encrypt(&st);
+    chunk_id_t tree_chunk = content_id(st.mem, tree_size);
     int l;
     dubtree_handle_t f = get_chunk(t, tree_chunk, 1, 0, &l);
     if (invalid_handle(f)) {
