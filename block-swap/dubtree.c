@@ -1157,12 +1157,13 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
                 err(1, "linkat failed for %d -> %s", hgs->fd, fn);
             }
             free(fn);
+        } else {
+            fprintf(stderr, "chunk damaged in transmit, not caching!!\n");
         }
+
         hgs->buffer = NULL;
         unmap_file(b, hgs->size);
         hgs_deref(hgs);
-    } else {
-        fprintf(stderr, "chunk damaged in transmit, not caching!!\n");
     }
     return size * nmemb;
 }
