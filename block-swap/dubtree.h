@@ -31,15 +31,17 @@ static inline void clear_chunk_id(chunk_id_t *chunk_id)
     memset(chunk_id, 0, sizeof(*chunk_id));
 }
 
-static inline int equal_chunk_ids(const chunk_id_t *a, const chunk_id_t *b)
-{
-    return (a->size == b->size &&
-            !memcmp(a->id.bytes, b->id.bytes, sizeof(a->id.bytes)));
-}
-
 static inline int valid_chunk_id(const chunk_id_t *chunk_id)
 {
     return chunk_id->size != 0;
+}
+
+static inline int equal_chunk_ids(const chunk_id_t *a, const chunk_id_t *b)
+{
+    //assert(valid_chunk_id(a));
+//    assert(valid_chunk_id(b));
+    return (a->size == b->size &&
+            !memcmp(a->id.bytes, b->id.bytes, sizeof(a->id.bytes)));
 }
 
 typedef struct DubTreeHeader {
@@ -56,6 +58,8 @@ typedef void (*read_callback) (void *opaque, int result);
 typedef void *(*malloc_callback) (void *opaque, size_t sz);
 typedef void (*free_callback) (void *opaque, void *ptr);
 
+struct CacheLineUserData;
+
 typedef struct DubTree {
     critical_section write_lock;
     DubTreeHeader *header;
@@ -67,6 +71,7 @@ typedef struct DubTree {
     critical_section cache_lock;
     HashTable ht;
     LruCache lru;
+    struct CacheLineUserData *cache_infos;
     CBF cbf;
     int buffer_max;
     void *buffered;

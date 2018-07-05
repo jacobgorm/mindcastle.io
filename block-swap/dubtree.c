@@ -44,7 +44,7 @@ static int populate_cbf(DubTree *t, Crypto *crypto, int n);
 static dubtree_handle_t prepare_http_get(DubTree *t,
         int synchronous, const char *url, chunk_id_t chunk_id);
 
-typedef struct {
+typedef struct CacheLineUserData {
     dubtree_handle_t f;
     chunk_id_t chunk_id;
 } CacheLineUserData;
@@ -74,11 +74,7 @@ int dubtree_init(DubTree *t,
     hashtable_init(&t->ht, NULL, NULL);
     const int log_cache_lines = 4;
     lru_cache_init(&t->lru, log_cache_lines);
-    for (int i = 0; i < (1 << log_cache_lines); ++i) {
-        CacheLineUserData *ud = calloc(1, sizeof(CacheLineUserData));
-        LruCacheLine *cl = lru_cache_get_line(&t->lru, i);
-        cl->value = (uintptr_t) ud;
-    }
+    t->cache_infos = calloc(1 << log_cache_lines, sizeof(CacheLineUserData));
     critical_section_leave(&t->cache_lock);
 
     fb = t->fallbacks;
@@ -349,20 +345,22 @@ void decrement_counter(CallbackState *cs)
 static void decrypt_read(void *opaque, int result)
 {
     DecryptState *ds = opaque;
-    const uint8_t *hash = ds->hashes;
-    uint8_t *dst = ds->buffer;
-    const uint8_t *src = ds->buffer;
-    for (int i = 0; i < ds->num_keys; ++i, hash += CRYPTO_TAG_SIZE) {
-        int size = ds->sizes[i];
-        if (size > 0) {
-            uint8_t tmp[DUBTREE_BLOCK_SIZE];
-            ds->sizes[i] = decrypt256(ds->crypto, tmp, src + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE, hash, src);
-            memcpy(dst, tmp, size);
-            src += size;
-            dst += ds->sizes[i];
+    if (result >= 0) {
+        const uint8_t *hash = ds->hashes;
+        uint8_t *dst = ds->buffer;
+        const uint8_t *src = ds->buffer;
+        for (int i = 0; i < ds->num_keys; ++i, hash += CRYPTO_TAG_SIZE) {
+            int size = ds->sizes[i];
+            if (size > 0) {
+                uint8_t tmp[DUBTREE_BLOCK_SIZE];
+                ds->sizes[i] = decrypt256(ds->crypto, tmp, src + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE, hash, src);
+                memcpy(dst, tmp, size);
+                src += size;
+                dst += ds->sizes[i];
+            }
         }
+        free(ds->hashes);
     }
-    free(ds->hashes);
     ds->cb(ds->opaque, result);
     free(ds);
 }
@@ -1262,7 +1260,7 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
     if (hashtable_find(&t->ht, chunk_id.id.first64, &line)) {
         cl = lru_cache_touch_line(&t->lru, line);
         ++(cl->users);
-        CacheLineUserData *ud = (CacheLineUserData *) cl->value;
+        CacheLineUserData *ud = &t->cache_infos[line];
         f = ud->f;
         *l = line; // XXX
     } else {
@@ -1293,8 +1291,7 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
                     break;
                 }
             }
-            CacheLineUserData *ud = (CacheLineUserData *) cl->value;
-            assert(ud);
+            CacheLineUserData *ud = &t->cache_infos[line];
             if (cl->key) {
                 hashtable_delete(&t->ht, cl->key);
                 close_chunk_file(ud->f);
@@ -1380,7 +1377,7 @@ static inline void __put_chunk(DubTree *t, int line)
 
     if (cl->users-- == 1) {
         if (cl->delete) {
-            CacheLineUserData *ud = (CacheLineUserData *) cl->value;
+            CacheLineUserData *ud = &t->cache_infos[line];
             chunk_id = ud->chunk_id;
             f = ud->f;
             hashtable_delete(&t->ht, cl->key);
@@ -1413,7 +1410,7 @@ static inline void __free_chunk(DubTree *t, chunk_id_t chunk_id)
             cl->delete = 1;
             delete = 0;
         } else {
-            CacheLineUserData *ud = (CacheLineUserData *) cl->value;
+            CacheLineUserData *ud = &t->cache_infos[line];
             f = ud->f;
             hashtable_delete(&t->ht, cl->key);
             cl->key = 0;
@@ -1792,11 +1789,11 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
                 e->hash = min->hash;
                 t_buffered += min->size;
             }
-            last_chunk_id = min->chunk_id;
         } else {
             garbage += min->size;
         }
 
+        last_chunk_id = min->chunk_id;
 
         /* Find next min for next round. */
         if (min->st) {
@@ -1972,16 +1969,13 @@ void dubtree_close(DubTree *t)
 
     hashtable_clear(&t->ht);
     for (int i = 0; i < (1 << t->lru.log_lines); ++i) {
-        LruCacheLine *cl = lru_cache_get_line(&t->lru, i);
-        CacheLineUserData *ud = (CacheLineUserData *) cl->value;
-        if (ud) {
-            dubtree_handle_t f = ud->f;
-            if (f) {
-                close_chunk_file(f);
-            }
-            free(ud);
+        CacheLineUserData *ud = &t->cache_infos[i];
+        dubtree_handle_t f = ud->f;
+        if (f) {
+            close_chunk_file(f);
         }
     }
+    free(t->cache_infos);
     lru_cache_close(&t->lru);
 
     free(t->buffered);

@@ -403,6 +403,7 @@ size_t swap_set_key(void *out, const void *in)
 
     int size = LZ4_compress_default((const char*)in, (char*) out, DUBTREE_BLOCK_SIZE, DUBTREE_BLOCK_SIZE * 2);
     if (size >= DUBTREE_BLOCK_SIZE) {
+        memcpy(out, in, DUBTREE_BLOCK_SIZE);
         size = DUBTREE_BLOCK_SIZE;
     }
     return size;
