@@ -64,15 +64,7 @@ static inline int cbf_modify(CBF *cbf, const uint8_t *key, const int direction)
 
 int cbf_add(CBF *cbf, const uint8_t *key)
 {
-    // XXX XXX 
-    uint8_t tmp[32];
-    memcpy(tmp, key, 16);
-    for (int i = 0; i < 16; ++i) {
-        tmp[16 + i] = key[15 - i];
-    }
-    // XXX XXX 
-
-    int overflow = cbf_modify(cbf, tmp, 1);
+    int overflow = cbf_modify(cbf, key, 1);
     if (overflow || cbf->n > cbf->max) {
         printf("OVERFLOWING!\n");
         assert(0);
@@ -83,15 +75,7 @@ int cbf_add(CBF *cbf, const uint8_t *key)
 
 int cbf_remove(CBF *cbf, const uint8_t *key)
 {
-    // XXX XXX 
-    uint8_t tmp[32];
-    memcpy(tmp, key, 16);
-    for (int i = 0; i < 16; ++i) {
-        tmp[16 + i] = key[15 - i];
-    }
-    // XXX XXX 
- 
-    return cbf_modify(cbf, tmp, -1);
+    return cbf_modify(cbf, key, -1);
 }
 
 
