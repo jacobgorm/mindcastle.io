@@ -76,21 +76,21 @@ typedef struct DubTree {
 
 } DubTree;
 
-int dubtree_insert(DubTree *t, Crypto *crypto, int numKeys, uint64_t* keys,
+int dubtree_insert(DubTree *t, int numKeys, uint64_t* keys,
         uint8_t *values, uint32_t *sizes, int force_level);
 
 void *dubtree_prepare_find(DubTree *t);
 void dubtree_end_find(DubTree *t, void *ctx);
 
-int dubtree_find(DubTree *t, Crypto *crypto, uint64_t start, int num_keys,
+int dubtree_find(DubTree *t, uint64_t start, int num_keys,
         uint8_t *out, uint8_t *map, uint32_t *sizes,
         read_callback cb, void *opaque, void *ctx);
 
-int dubtree_init(DubTree *t, Crypto *crypto, char **fallbacks, char *cache,
+int dubtree_init(DubTree *t, char **fallbacks, char *cache,
         malloc_callback malloc_cb, free_callback free_cb, void *opaque);
 void dubtree_close(DubTree *t);
-int dubtree_delete(DubTree *t, Crypto *crypto);
+int dubtree_delete(DubTree *t);
 void dubtree_quiesce(DubTree *t);
-int dubtree_sanity_check(DubTree *t, Crypto *crypto);
+int dubtree_sanity_check(DubTree *t);
 
 #endif /* __DUBTREE_H__ */

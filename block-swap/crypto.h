@@ -9,10 +9,10 @@ typedef struct Crypto {
     uint8_t *key;
     const void *cipher;
     void *ctx;
-    void *ctx2;
 } Crypto;
 
 void crypto_init(Crypto *c, uint8_t *key);
+void crypto_close(Crypto *crypto);
 
 int encrypt256(Crypto *c, uint8_t *ciphertext, uint8_t *tag, const uint8_t *plaintext, int plaintext_len,
         const uint8_t *iv);

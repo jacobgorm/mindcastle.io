@@ -49,7 +49,7 @@ typedef struct {
     chunk_id_t chunk_id;
 } CacheLineUserData;
 
-int dubtree_init(DubTree *t, Crypto *crypto,
+int dubtree_init(DubTree *t,
         char **fallbacks, char *cache,
         malloc_callback malloc_cb, free_callback free_cb,
         void *opaque)
@@ -199,7 +199,6 @@ int dubtree_init(DubTree *t, Crypto *crypto,
 
         __sync_synchronize();
     }
-    memcpy(crypto->key, t->header->key, CRYPTO_KEY_SIZE);
 
     /* Check that shared data structure matches current version and
      * configuration. */
@@ -207,7 +206,11 @@ int dubtree_init(DubTree *t, Crypto *crypto,
         (t->header->version == DUBTREE_FILE_VERSION) &&
         (t->header->dubtree_slot_size == DUBTREE_SLOT_SIZE) &&
         (t->header->dubtree_max_levels == DUBTREE_MAX_LEVELS)) {
-        populate_cbf(t, crypto, 0);
+
+        Crypto crypto;
+        crypto_init(&crypto, t->header->key);
+        populate_cbf(t, &crypto, 0);
+        crypto_close(&crypto);
         return 0;
     } else {
         printf("mismatched dubtree header!\n");
@@ -775,6 +778,7 @@ typedef struct FindContext {
 #ifdef _WIN32
     HANDLE event;
 #endif
+    Crypto crypto;
 } FindContext;
 
 void *dubtree_prepare_find(DubTree *t)
@@ -783,6 +787,7 @@ void *dubtree_prepare_find(DubTree *t)
 #ifdef _WIN32
     fx->event = CreateEvent(NULL, FALSE, FALSE, NULL);
 #endif
+    crypto_init(&fx->crypto, t->header->key);
     return fx;
 }
 
@@ -801,10 +806,11 @@ void dubtree_end_find(DubTree *t, void *ctx)
 #ifdef _WIN32
     CloseHandle(fx->event);
 #endif
+    crypto_close(&fx->crypto);
     free(fx);
 }
 
-int dubtree_find(DubTree *t, Crypto *crypto, uint64_t start, int num_keys,
+int dubtree_find(DubTree *t, uint64_t start, int num_keys,
         uint8_t *buffer, uint8_t *map, uint32_t *sizes,
         read_callback cb, void *opaque, void *ctx)
 {
@@ -856,7 +862,7 @@ int dubtree_find(DubTree *t, Crypto *crypto, uint64_t start, int num_keys,
     ds->sizes = sizes;
     ds->buffer = buffer;
     ds->num_keys = num_keys;
-    ds->crypto = crypto;
+    ds->crypto = &fx->crypto;
     ds->hashes = hashes;
 
     cs->cb = decrypt_read;
@@ -888,7 +894,7 @@ int dubtree_find(DubTree *t, Crypto *crypto, uint64_t start, int num_keys,
         }
         if (!valid_chunk_id(&ct->chunk) && valid_chunk_id(&t->levels[i])) {
             ct->chunk = t->levels[i];
-            simpletree_open(&ct->st, crypto,
+            simpletree_open(&ct->st, &fx->crypto,
                     __get_chunk_fd(t, ct->chunk), t->hashes[i]);
         }
     }
@@ -1519,7 +1525,7 @@ static inline void insert_kv(SimpleTree *st,
     simpletree_insert(st, key, v);
 }
 
-int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
+int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         uint8_t *values, uint32_t *sizes,
         int force_level)
 {
@@ -1547,6 +1553,8 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
     struct buf_elem {uint64_t key; int offset; int size; hash_t hash;};
     struct buf_elem *buffered = t->buffered;
 
+    Crypto crypto;
+    crypto_init(&crypto, t->header->key);
     int total_size = 0;
     for (i = 0; i < num_keys; ++i) {
         total_size += CRYPTO_IV_SIZE + sizes[i];
@@ -1559,7 +1567,7 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
     for (i = 0; i < num_keys; ++i, hash += CRYPTO_TAG_SIZE) {
         int size = sizes[i];
         RAND_bytes(enc, CRYPTO_IV_SIZE);
-        sizes[i] = CRYPTO_IV_SIZE + encrypt256(crypto, enc + CRYPTO_IV_SIZE,
+        sizes[i] = CRYPTO_IV_SIZE + encrypt256(&crypto, enc + CRYPTO_IV_SIZE,
                 hash, v, size, enc);
         v += size;
         enc += sizes[i];
@@ -1588,7 +1596,7 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
             SimpleTreeResult k;
             existing = &trees[i];
 
-            simpletree_open(existing, crypto,
+            simpletree_open(existing, &crypto,
                     get_chunk_fd(t, t->levels[i]), t->hashes[i]);
 
             cud = simpletree_get_user(existing);
@@ -1642,7 +1650,7 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
     }
 
     /* Create the new B-tree to index the destination level. */
-    simpletree_create(&st, crypto);
+    simpletree_create(&st, &crypto);
 
     uint32_t b = 0;
     int n_buffered = 0;
@@ -1826,7 +1834,7 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
 
     if (ud->num_chunks - prev_n_chunks + t->cbf.n > t->cbf.max) {
         printf("rebuild %d %d %d %d\n", ud->num_chunks, prev_n_chunks, t->cbf.n, t->cbf.max);
-        populate_cbf(t, crypto, ud->num_chunks - prev_n_chunks);
+        populate_cbf(t, &crypto, ud->num_chunks - prev_n_chunks);
     }
 
     for (int i = 0; i < ud->num_chunks; ++i) {
@@ -1903,13 +1911,16 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
     free(deref);
     free(hashes);
     free(encrypted_values);
+    crypto_close(&crypto);
 
     return 0;
 }
 
-int dubtree_delete(DubTree *t, Crypto *crypto)
+int dubtree_delete(DubTree *t)
 {
     int i, j;
+    Crypto crypto;
+    crypto_init(&crypto, t->header->key);
 
     critical_section_enter(&t->cache_lock);
     for (i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
@@ -1918,7 +1929,7 @@ int dubtree_delete(DubTree *t, Crypto *crypto)
 
             SimpleTree st;
             const UserData *cud;
-            simpletree_open(&st, crypto, get_chunk_fd(t, chunk_id),
+            simpletree_open(&st, &crypto, get_chunk_fd(t, chunk_id),
                     t->hashes[i]);
 
             cud = simpletree_get_user(&st);
@@ -1931,6 +1942,7 @@ int dubtree_delete(DubTree *t, Crypto *crypto)
         }
     }
     critical_section_leave(&t->cache_lock);
+    crypto_close(&crypto);
 
     char *mn;
     asprintf(&mn, "%s/"DUBTREE_MMAPPED_NAME, t->fallbacks[0]);
@@ -1991,9 +2003,11 @@ void dubtree_close(DubTree *t)
 }
 
 
-int dubtree_sanity_check(DubTree *t, Crypto *crypto)
+int dubtree_sanity_check(DubTree *t)
 {
     int i;
+    Crypto crypto;
+    crypto_init(&crypto, t->header->key);
     for (i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
         /* Figure out how many bytes are in use at this level. */
 
@@ -2004,7 +2018,7 @@ int dubtree_sanity_check(DubTree *t, Crypto *crypto)
             const UserData *cud;
 
             printf("get level %d\n", i);
-            simpletree_open(&st, crypto, get_chunk_fd(t, t->levels[i]), t->hashes[i]);
+            simpletree_open(&st, &crypto, get_chunk_fd(t, t->levels[i]), t->hashes[i]);
             simpletree_begin(&st, &it);
             cud = simpletree_get_user(&st);
             printf("check level %d\n", i);
@@ -2050,5 +2064,6 @@ int dubtree_sanity_check(DubTree *t, Crypto *crypto)
             simpletree_close(&st);
         }
     }
+    crypto_close(&crypto);
     return 0;
 }

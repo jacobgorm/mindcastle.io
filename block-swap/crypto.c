@@ -27,9 +27,6 @@ void crypto_init(Crypto *crypto, uint8_t *key)
     if (!(crypto->ctx = EVP_CIPHER_CTX_new())) {
         errx(1, "EVP_CIPHER_CTX_new failed");
     }
-    if (!(crypto->ctx2 = EVP_CIPHER_CTX_new())) {
-        errx(1, "EVP_CIPHER_CTX_new failed");
-    }
     crypto->key = key; /* by reference to avoid many copies of key in memory. */
 }
 
@@ -68,7 +65,7 @@ int decrypt256(Crypto *crypto, uint8_t *plaintext, const uint8_t *ciphertext,
         int ciphertext_len, const uint8_t *tag, const uint8_t *iv)
 {
     const EVP_CIPHER *cipher = crypto->cipher;
-    EVP_CIPHER_CTX *ctx = crypto->ctx2;
+    EVP_CIPHER_CTX *ctx = crypto->ctx;
 
     int len;
     int plaintext_len;
@@ -93,4 +90,9 @@ int decrypt256(Crypto *crypto, uint8_t *plaintext, const uint8_t *ciphertext,
     plaintext_len += len;
 
     return plaintext_len;
+}
+
+void crypto_close(Crypto *crypto)
+{
+    EVP_CIPHER_CTX_free(crypto->ctx);
 }

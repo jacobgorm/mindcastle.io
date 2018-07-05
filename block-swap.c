@@ -70,9 +70,6 @@
 
 #include <lz4.h>
 
-/* Actual key will get filled in by dubtree_init() */
-static uint8_t the_key[CRYPTO_KEY_SIZE] = {};
-
 #define LIBIMG
 
 //#include "uuidgen.h"
@@ -333,8 +330,6 @@ typedef struct BDRVSwapState {
     int log_swap_fills;
     int store_uncompressed;
 
-    Crypto inline_crypto, read_crypto, insert_crypto;
-
 #ifdef _WIN32
     HANDLE heap;
     swap_handle_t volume; /* Volume for opening by id. */
@@ -578,8 +573,7 @@ swap_insert_thread(void * _s)
         int i;
         uint32_t load;
 
-        r = dubtree_insert(&s->t, &s->insert_crypto, n, keys, cbuf,
-                c->sizes, 0);
+        r = dubtree_insert(&s->t, n, keys, cbuf, c->sizes, 0);
         free(c->sizes);
 
         swap_lock(s);
@@ -1176,11 +1170,7 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
         }
     }
 
-    crypto_init(&s->inline_crypto, the_key);
-    crypto_init(&s->read_crypto, the_key);
-    crypto_init(&s->insert_crypto, the_key);
-
-    if (dubtree_init(&s->t, &s->inline_crypto, s->fallbacks, s->cache,
+    if (dubtree_init(&s->t, s->fallbacks, s->cache,
                 swap_malloc, swap_free, s) != 0) {
         warn("swap: failed to init dubtree");
         r = -1;
@@ -1289,7 +1279,7 @@ out:
 {
     int r;
     BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
-    dubtree_delete(&s->t, &s->inline_crypto);
+    dubtree_delete(&s->t);
     r = unlink(s->filename);
     if (r < 0) {
         debug_printf("swap: unable to unlink %s\n", s->filename);
@@ -2028,7 +2018,7 @@ static int __swap_dubtree_read(BDRVSwapState *s, SwapAIOCB *acb)
     }
 
     do {
-        r = dubtree_find(&s->t, &s->inline_crypto, start, end - start, decomp,
+        r = dubtree_find(&s->t, start, end - start, decomp,
                 map, sizes,
                 dubtree_read_complete_cb, acb, s->find_context);
     } while (r == -EAGAIN);
