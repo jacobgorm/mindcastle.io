@@ -70,10 +70,10 @@ void simpletree_close(SimpleTree *st)
     free(st->mem);
     free(st->user_data);
     free(st->node_buf);
+    free(st->cached_nodes);
     if (st->is_encrypted) {
         lru_cache_close(&st->lru);
         hashtable_clear(&st->ht);
-        free(st->cached_nodes);
     }
     if (st->fd >= 0) {
         close(st->fd);

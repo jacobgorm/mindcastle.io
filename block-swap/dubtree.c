@@ -660,7 +660,10 @@ static inline void unmap_file(void *mem, size_t size)
         printf("UnmapViewOfFile failed, err=%u\n", (uint32_t) GetLastError());
     }
 #else
-    munmap(mem, size);
+    int r = munmap(mem, size);
+    if (r < 0) {
+        err(1, "unmap_file");
+    }
 #endif
 }
 
@@ -754,7 +757,7 @@ static int populate_cbf(DubTree *t, Crypto *crypto, int n)
                 cbf_add(&t->cbf, chunk_id.id.bytes);
                 ++added;
             }
-            unmap_file(st->mem, simpletree_get_nodes_size(st));
+            simpletree_close(st);
         }
     }
 
@@ -791,8 +794,8 @@ void dubtree_end_find(DubTree *t, void *ctx)
     for (i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
         CachedTree *ct = &fx->cached_trees[i];
         if (valid_chunk_id(&ct->chunk)) {
-            unmap_file(ct->st.mem, simpletree_get_nodes_size(&ct->st));
             clear_chunk_id(&ct->chunk);
+            simpletree_close(&ct->st);
         }
     }
 #ifdef _WIN32
@@ -879,7 +882,7 @@ int dubtree_find(DubTree *t, Crypto *crypto, uint64_t start, int num_keys,
         CachedTree *ct = &fx->cached_trees[i];
         if (valid_chunk_id(&ct->chunk)) {
             if (!equal_chunk_ids(&ct->chunk, &t->levels[i])) {
-                unmap_file(ct->st.mem, simpletree_get_nodes_size(&ct->st));
+                simpletree_close(&ct->st);
                 clear_chunk_id(&ct->chunk);
             }
         }
@@ -1544,7 +1547,6 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
     struct buf_elem {uint64_t key; int offset; int size; hash_t hash;};
     struct buf_elem *buffered = t->buffered;
 
-
     int total_size = 0;
     for (i = 0; i < num_keys; ++i) {
         total_size += CRYPTO_IV_SIZE + sizes[i];
@@ -1611,7 +1613,6 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
             heap[j] = min;
             sift_up(t, heap, j++);
         } else {
-            trees[i].mem = NULL;
             existing = NULL;
             fragments = 0;
             garbage = used = 0;
@@ -1893,8 +1894,7 @@ int dubtree_insert(DubTree *t, Crypto *crypto, int num_keys, uint64_t* keys,
                     __free_chunk(t, dead_chunk_id);
                 }
             }
-
-            unmap_file(st->mem, simpletree_get_nodes_size(st));
+            simpletree_close(st);
             __free_chunk(t, chunk_id);
         }
     }
@@ -1926,7 +1926,7 @@ int dubtree_delete(DubTree *t, Crypto *crypto)
                 __free_chunk(t, cud->chunk_ids[j]);
             }
 
-            unmap_file(st.mem, simpletree_get_nodes_size(&st));
+            simpletree_close(&st);
             __free_chunk(t, chunk_id);
         }
     }
@@ -2047,7 +2047,7 @@ int dubtree_sanity_check(DubTree *t, Crypto *crypto)
 
                 simpletree_next(&st, &it);
             }
-            unmap_file(st.mem, simpletree_get_nodes_size(&st));
+            simpletree_close(&st);
         }
     }
     return 0;
