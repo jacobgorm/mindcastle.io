@@ -209,7 +209,7 @@ int dubtree_init(DubTree *t,
         return 0;
     } else {
         printf("mismatched dubtree header!\n");
-        assert(0);
+        exit(1);
         return -1;
     }
 }
