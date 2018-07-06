@@ -93,7 +93,6 @@ int dubtree_init(DubTree *t,
         if (!(*fb = dubtree_realpath(in))) {
             *fb = strdup(in);
         }
-        printf("fb %s\n", *fb);
         ++fb;
     }
     *fb = NULL;
