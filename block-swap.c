@@ -74,39 +74,6 @@
 
 //#include "uuidgen.h"
 
-#ifdef _WIN32
-#include <winternl.h>
-#define FILE_OPEN                         0x00000001
-#define FILE_OPEN_BY_FILE_ID              0x00002000
-#define FILE_NON_DIRECTORY_FILE           0x00000040
-#define FILE_SEQUENTIAL_ONLY              0x00000004
-#define FILE_OPEN_FOR_BACKUP_INTENT       0x00004000
-
-typedef ULONG (__stdcall *pNtCreateFile)(
-        PHANDLE FileHandle,
-        ULONG DesiredAccess,
-        PVOID ObjectAttributes,
-        PVOID IoStatusBlock,
-        PLARGE_INTEGER AllocationSize,
-        ULONG FileAttributes,
-        ULONG ShareAccess,
-        ULONG CreateDisposition,
-        ULONG CreateOptions,
-        PVOID EaBuffer,
-        ULONG EaLength
-        );
-
-extern HRESULT WINAPI FilterConnectCommunicationPort(
-    LPCWSTR lpPortName,
-    DWORD dwOptions,
-    LPCVOID lpContext,
-    WORD wSizeOfContext,
-    LPSECURITY_ATTRIBUTES lpSecurityAttributes ,
-    HANDLE *hPort
-    );
-
-#endif
-
 #define WRITE_RATELIMIT_THR_BYTES (32 << 20)
 #define WRITE_BLOCK_THR_BYTES (WRITE_RATELIMIT_THR_BYTES * 2)
 #define WRITE_RATELIMIT_GAP_MS 10
@@ -128,26 +95,6 @@ static int swap_backend_active = 0;
 #else
   #define SWAP_LOG_BLOCK_CACHE_LINES 8
 #endif
-
-#ifdef _WIN32
-typedef HANDLE swap_handle_t;
-#define SWAP_INVALID_HANDLE INVALID_HANDLE_VALUE
-#else
-typedef int swap_handle_t;
-#define SWAP_INVALID_HANDLE -1
-#endif
-
-typedef struct SwapMapTuple {
-    uint32_t end;
-    uint32_t size;
-    uint32_t file_offset;
-    uint32_t name_offset;
-#ifdef _WIN32
-    uint32_t file_id_highpart;
-    uint32_t file_id_lowpart;
-#endif
-} SwapMapTuple;
-
 
 struct heap_elem {
     uint64_t key, value;
@@ -287,13 +234,7 @@ typedef struct BDRVSwapState {
     uuid_t uuid;
     uint64_t size;
 
-    SwapMappedFile shallow_map;
-    size_t shallow_map_size;
-    size_t num_maps;
-    SwapMapTuple *map_idx;
-    const char *map_strings;
     HashTable open_files;
-    LruCache fc;
     HashTable cached_blocks;
     HashTable busy_blocks;
     LruCache bc;
@@ -301,7 +242,6 @@ typedef struct BDRVSwapState {
     int pq_switch;
     uint64_t pq_cutoff;
     critical_section mutex;
-    critical_section shallow_mutex;
     volatile int flush;
     volatile int quit;
     volatile int alloced;
@@ -315,16 +255,11 @@ typedef struct BDRVSwapState {
     thread_event can_insert_event;
     uxen_thread insert_thread;
 
-    thread_event read_event;
-    uxen_thread read_thread;
-
     thread_event all_flushed_event;
 
     DubTree t;
     void *find_context;
 
-    struct SwapAIOCB *read_queue_head;
-    struct SwapAIOCB *read_queue_tail;
     TAILQ_HEAD(, SwapAIOCB) rlimit_write_queue;
 
     int log_swap_fills;
@@ -332,8 +267,6 @@ typedef struct BDRVSwapState {
 
 #ifdef _WIN32
     HANDLE heap;
-    swap_handle_t volume; /* Volume for opening by id. */
-    LARGE_INTEGER map_file_creation_time; /* map.idx creation timestamp. */
 #endif
 
 } BDRVSwapState;
@@ -379,12 +312,6 @@ typedef struct SwapAIOCB {
 #endif
 
 } SwapAIOCB;
-/* Forward declarations. */
-#ifdef _WIN32
-static DWORD WINAPI swap_read_thread(void *_s);
-#else
-static void *swap_read_thread(void *_s);
-#endif
 
 /* Wrappers for compress and expand functions. */
 
@@ -464,11 +391,6 @@ static inline void swap_signal_can_insert(BDRVSwapState *s)
     thread_event_set(&s->can_insert_event);
 }
 
-static inline void swap_signal_read(BDRVSwapState *s)
-{
-    thread_event_set(&s->read_event);
-}
-
 static inline void swap_wait_write(BDRVSwapState *s)
 {
     thread_event_wait(&s->write_event);
@@ -489,11 +411,6 @@ static inline void swap_wait_insert(BDRVSwapState *s)
 static inline void swap_wait_can_insert(BDRVSwapState *s)
 {
     thread_event_wait(&s->can_insert_event);
-}
-
-static inline void swap_wait_read(BDRVSwapState *s)
-{
-    thread_event_wait(&s->read_event);
 }
 
 static inline void swap_signal_all_flushed(BDRVSwapState *s)
@@ -872,193 +789,6 @@ static int swap_read_header(BDRVSwapState *s)
     return 0;
 }
 
-/* Map a file into memory, closing the file handle whether we succeed or not.
- * If caller supplies 0 as length, maps the entire file. If caller supplies
- * length > actual file length (likely for shallow maps, as these are 4kIB
- * block aligned), we map as much as we have. */
-#ifdef _WIN32
-int swap_map_file(swap_handle_t file,
-        uint64_t offset, uint64_t length,
-        SwapMappedFile *mf)
-{
-    int r = 0;
-    HANDLE h = INVALID_HANDLE_VALUE;
-    uint64_t file_size;
-    SYSTEM_INFO si;
-    static uint64_t granularity = 0;
-
-    file_size = GetFileSize(file, NULL) - offset;  /* XXX 32-bit only. */
-    /* Check for no caller-supplied length, or one exceeding file size. */
-    mf->size = (!length || file_size < length) ? file_size : length;
-
-    /* Windows usually has 64kiB mapping granularity, and the offset into
-     * the file must be aligned to this. */
-    if (!granularity) {
-        GetSystemInfo(&si);
-        granularity = si.dwAllocationGranularity;
-    }
-    mf->modulo = offset & (granularity - 1);
-    offset -= mf->modulo;
-    mf->size += mf->modulo;
-
-    h = CreateFileMappingA(file, NULL, PAGE_READONLY, 0, 0, NULL);
-    if (!h) {
-        Werr(1, "swap: unable to map file");
-        r = -1;
-        goto out;
-    }
-
-    mf->mapping = MapViewOfFile(h, FILE_MAP_COPY, 0, offset, mf->size);
-    if (!mf->mapping) {
-        debug_printf("failed offset=%"PRIx64" size=%"PRIx64"\n", offset, mf->size);
-        Werr(1, "swap: unable to map view");
-        r = -1;
-    }
-
-    /* No longer need the mapping and file handles. */
-out:
-    if (h) {
-        CloseHandle(h);
-    }
-    CloseHandle(file);
-    return r;
-}
-
-void swap_unmap_file(SwapMappedFile *mf)
-{
-    UnmapViewOfFile(mf->mapping);
-}
-
-static inline swap_handle_t open_file_readonly(const char *fn)
-{
-    return CreateFile(fn, GENERIC_READ,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
-            OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
-}
-
-static inline void close_file(HANDLE f)
-{
-    CloseHandle(f);
-}
-
-#else
-/* See comment for win32 version above. */
-int swap_map_file(swap_handle_t file,
-        uint64_t offset,
-        uint64_t length,
-        SwapMappedFile *mf)
-{
-    struct stat st;
-    static uint64_t granularity = 0;
-
-    if (fstat(file, &st) < 0) {
-        close(file);
-        return -1;
-    }
-
-    /* Check for no caller-supplied length, or one exceeding file size. */
-    mf->size = (!length || st.st_size < length) ? st.st_size : length;
-
-    /* Adjust supplied offset to match system mapping granularity. */
-    if (!granularity) {
-        granularity = sysconf(_SC_PAGESIZE);
-    }
-    mf->modulo = offset & (granularity - 1);
-    offset -= mf->modulo;
-    mf->size += mf->modulo;
-
-    mf->mapping = mmap(NULL, mf->size, PROT_READ, MAP_PRIVATE, file, offset);
-    /* Always close fd as we no longer need it. */
-    close(file);
-    if (mf->mapping == MAP_FAILED) {
-        err(1, "unable to map file");
-        return -1;
-    }
-    return 0;
-}
-
-void swap_unmap_file(SwapMappedFile *mf)
-{
-    munmap(mf->mapping, mf->size);
-}
-
-static inline swap_handle_t open_file_readonly(const char *fn)
-{
-    return open(fn, O_RDONLY | O_NOATIME);
-}
-
-static inline void close_file(int f)
-{
-    close(f);
-}
-#endif
-
-static int swap_init_map(BDRVSwapState *s, char *path, char *cow_backup)
-{
-    uint32_t *idx;
-    swap_handle_t map_file;
-
-#if 0
-    /* Is there a 'cow' dir under swapdata? */
-    if (file_exists(cow_backup)) {
-        s->cow_backup = strdup(cow_backup);
-        if (!s->cow_backup) {
-            warnx("OOM error %s line %d", __FUNCTION__, __LINE__);
-            return -1;
-        }
-    } else {
-        s->cow_backup = NULL;
-    }
-#else
-    s->cow_backup = NULL;
-#endif
-
-    /* Map the binary-searchable index over shallow mapped files. */
-    map_file = open_file_readonly(path);
-    if (map_file == SWAP_INVALID_HANDLE) {
-        return -1;
-    }
-
-#ifdef _WIN32
-    char vol[8];
-    /* Open the volume that holds the cow directory. */
-    if (s->cow_backup && (strlen(s->cow_backup) > 1) && (s->cow_backup[1] == ':')) {
-        sprintf(vol, "\\\\.\\%2.2s", s->cow_backup);
-    } else {
-        sprintf(vol, "\\\\.\\C:");
-    }
-    s->volume = CreateFile(
-                    vol,
-                    0, /* This needs to be zero else low-privilege processes will get ERROR_ACCESS_DENIED */
-                    FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    NULL,
-                    OPEN_EXISTING,
-                    FILE_FLAG_BACKUP_SEMANTICS,
-                    NULL);
-    if (s->volume == INVALID_HANDLE_VALUE) {
-        Wwarn("swap: error opening volume %s", vol);
-        return -1;
-    }
-
-    if (!GetFileTime(map_file, (LPFILETIME)&s->map_file_creation_time, NULL, NULL)) {
-        Werr(1, "unable to get creation time of map.idx");
-        return -1;
-    }
-#endif
-
-    /* swap_map_file() always closes the file handle. */
-    if (swap_map_file(map_file, 0, 0, &s->shallow_map) < 0) {
-        Werr(1, "unable to map map.idx!");
-        return -1;
-    }
-
-    idx = (uint32_t*) s->shallow_map.mapping;
-    s->num_maps= idx[0];
-    s->map_idx = (SwapMapTuple*) &idx[1];
-    s->map_strings = (const char*) &s->map_idx[s->num_maps];
-    return 0;
-}
-
 static inline
 char *swap_resolve_via_fallback(BDRVSwapState *s, const char *fn)
 {
@@ -1088,8 +818,6 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
     int r = 0;
     char *path, *real_path;
     char *swapdata = NULL;
-    char *cow = NULL;
-    char *map;
     char *c, *last;
     int i;
     /* Start out with well-defined state. */
@@ -1178,24 +906,6 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
         goto out;
     }
 
-    map = swap_resolve_via_fallback(s, "map.idx");
-    cow = swap_resolve_via_fallback(s, "cow");
-
-    /* Try to set up map.idx shallow index mapping, if present. */
-    if (swap_init_map(s, map, cow) != 0) {
-        //warn("swap: no map file found at '%s'", map);
-    }
-
-    /* Cache of open shallow file handles. */
-    if (hashtable_init(&s->open_files, NULL, NULL) < 0) {
-        warn("swap: unable to create hashtable for map");
-        return -1;
-    }
-    if (lru_cache_init(&s->fc, 6) < 0) {
-        warn("swap: unable to create lrucache for map");
-        return -1;
-    }
-
     /* A small write-back block cache, this is mainly to keep hot blocks such
      * as FS superblocks from getting inserted into the dubtree over and over.
      * This has large impact on the performance the libimg tools, and also
@@ -1230,14 +940,12 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
 #endif
 
     critical_section_init(&s->mutex); /* big lock. */
-    critical_section_init(&s->shallow_mutex); /* protects shallow cache. */
 
     thread_event *events[] = {
         &s->write_event,
         &s->can_write_event,
         &s->insert_event,
         &s->can_insert_event,
-        &s->read_event,
         &s->all_flushed_event,
     };
 
@@ -1256,11 +964,6 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
         Werr(1, "swap: unable to create thread!");
     }
 
-    if (create_thread(&s->read_thread, swap_read_thread, (void*) s) < 0) {
-        Werr(1, "swap: unable to create read thread!");
-    }
-    elevate_thread(s->read_thread);
-
     bs->total_sectors = s->size >> BDRV_SECTOR_BITS;
 
     debug_printf("%s: done\n", __FUNCTION__);
@@ -1269,7 +972,6 @@ out:
         warnx("swap: failed to open %s", filename);
     }
 
-    free(cow);
     swap_backend_active = 1; /* activates stats logging. */
     return r;
 }
@@ -1313,453 +1015,6 @@ void dump_swapstat(void)
 #endif
 }
 
-static inline const SwapMapTuple *swap_resolve_mapped_file(
-        BDRVSwapState *s, uint64_t block)
-{
-    size_t half;
-    size_t len = s->num_maps;
-    const SwapMapTuple *first = s->map_idx;
-    const SwapMapTuple *middle;
-    const SwapMapTuple *end = first + len;
-
-    /* Perform binary search over the sorted memory mapped array of file extent
-     * descriptor tuples. The extents are indexed by the end (first block to
-     * the right of the extent, ie. start+length), which fits with how a
-     * STL-type lower_bound() binary search works. Note that we search here for
-     * block+1. */
-
-    while (len > 0) {
-        half = len >> 1;
-        middle = first + half;
-
-        if (middle->end < (block + 1)) {
-            first = middle + 1;
-            len = len - half - 1;
-        } else
-            len = half;
-    }
-
-    if (first != end && block >= first->end - first->size && block != first->end) {
-        /* We found an extent covered by a host-side file. */
-        return first;
-    } else {
-        return NULL;
-    }
-}
-
-#ifdef _WIN32
-static swap_handle_t
-swap_open_file_by_id(HANDLE volume, uint64_t file_id)
-{
-    static pNtCreateFile NtCreateFile = NULL;
-    HANDLE h;
-    IO_STATUS_BLOCK iosb = {{0}};
-    OBJECT_ATTRIBUTES oa = {sizeof(oa), 0};
-    UNICODE_STRING name;
-
-    name.Buffer = (PWSTR)&file_id;
-    name.Length = name.MaximumLength = sizeof(file_id);
-    oa.ObjectName = &name;
-    oa.RootDirectory = volume;
-
-    if (!NtCreateFile) {
-    /* ntdll.dll will always be loaded! */
-        NtCreateFile = (pNtCreateFile)GetProcAddress(
-            GetModuleHandleW(L"ntdll.dll"), "NtCreateFile");
-        assert(NtCreateFile);
-    }
-
-    NTSTATUS rc = NtCreateFile(
-            &h,
-            GENERIC_READ,
-            &oa,
-            &iosb,
-            NULL,
-            FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            FILE_OPEN,
-            FILE_OPEN_BY_FILE_ID | FILE_OPEN_FOR_BACKUP_INTENT | FILE_NON_DIRECTORY_FILE,
-            NULL,
-            0);
-
-    if (rc) {
-        debug_printf("rc %x for file_id %"PRIx64"\n",
-            (uint32_t) rc, (uint64_t) file_id);
-        h = SWAP_INVALID_HANDLE;
-    }
-    return h;
-}
-
-#if !defined(LIBIMG)
-initcall(swap_early_init)
-{
-    HANDLE cow_port;
-
-    /* Connect to the BrCoW driver. Connecting to it enables the current process to read files
-       that have been opened exclusively by some other process. */
-    (HRESULT)FilterConnectCommunicationPort(L"\\CoWAllowReadPort", 0, NULL, 0,
-        NULL, &cow_port);
-
-    /* If successful cow_port will be released at process exit. */
-}
-#endif /* !defined(LIBIMG) */
-
-#endif
-
-static inline
-int swap_pread(swap_handle_t f, void *buf, size_t sz, uint64_t offset)
-{
-#ifdef _WIN32
-    OVERLAPPED o = {};
-    DWORD got = 0;
-    o.OffsetHigh = offset >>32ULL;
-    o.Offset = offset & 0xffffffff;
-
-    if (!ReadFile(f, buf, (DWORD)sz, NULL, &o)) {
-        if (GetLastError() != ERROR_IO_PENDING) {
-            printf("%s: ReadFile fails with error %u\n",
-                    __FUNCTION__, (uint32_t)GetLastError());
-            return -1;
-        }
-    }
-    if (!GetOverlappedResult(f, &o, &got, TRUE)) {
-        printf("GetOverlappedResult fails on line %d with error %u\n",
-                __LINE__, (uint32_t)GetLastError());
-        got = -1;
-    }
-    return (int) got;
-#else
-    int r;
-    do {
-        r = pread(f, buf, sz, offset);
-    } while (r < 0 && errno == EINTR);
-    return r;
-#endif
-}
-
-
-/* Fill in blocks that are missing after dubtree_find() call, by looking for
- * shallow files that would fit in the 'holes' in our read result.
- *
- * Loop over length of IO, where "map" describes which blocks still need
- * reading. Create IOs or memset-with-zero'es to fill the remaining holes.  We
- * memory map files of non-trivial size, so that once we have them open, we can
- * safely cache them for future use without worrying that they might change on
- * the host. The caching is there mainly to avoid opening and close the file
- * multiple times when a VM scans through a big file, not to try and compete
- * with the VM's buffer cache.
- *
- * So far the memory mapping is mainly useful on OSX, where we have a kernel
- * module that makes CoW-backups of files we have shallowed, placing them in
- * the swapdata/cow directory. Each time we lookup a shallow file, we look
- * under the cow directory first. Because memory mappings are not free, we
- * fast-path small files under 4kiB, especially OSX has many of those. */
-
-static int swap_fill_read_holes(BDRVSwapState *s, uint64_t offset, uint64_t count,
-        uint8_t *buffer, uint8_t *map)
-{
-    critical_section_enter(&s->shallow_mutex);
-    uint64_t start = offset / SWAP_SECTOR_SIZE;
-    uint64_t end = (offset + count + SWAP_SECTOR_SIZE - 1) / SWAP_SECTOR_SIZE;
-    uint64_t length = end - start;
-    int r = 0;
-
-    size_t i, j;
-    int reading = 0;
-    LruCache *fc = &s->fc;
-
-    for (i = j = 0; ; ++i) {
-
-        if (reading && (i == length || map[i] != 0)) {
-
-            /* We need to fill the blocks between j to i. */
-
-            while (j < i) {
-
-                const SwapMapTuple *tuple;
-                uint64_t readOffset = SWAP_SECTOR_SIZE * j;
-                uint64_t take = i * SWAP_SECTOR_SIZE;
-                uint64_t block = (offset + readOffset) / SWAP_SECTOR_SIZE;
-
-                /* Don't read more bytes than caller requested. */
-                take = take < count ? take : count;
-                /* Account for bytes read already. */
-                take -= readOffset;
-
-                /* Clear output buffer so that we don't leak data to the VM. */
-                memset(buffer + readOffset, 0, take);
-
-                /* See if these blocks are backed by a shallow mapped file. */
-                if (s->map_idx && (tuple = swap_resolve_mapped_file(s, block))) {
-
-                    uint64_t line;
-                    SwapMappedFile *evicted = NULL;
-                    SwapMappedFile *file = NULL;
-                    swap_handle_t handle = SWAP_INVALID_HANDLE;
-                    uint64_t map_offset;
-                    uint64_t tuple_start = tuple->end - tuple->size;
-                    uint64_t blocks_available = tuple->size - (block - tuple_start);
-
-                    if (take > (blocks_available * SWAP_SECTOR_SIZE)) {
-                        take = blocks_available * SWAP_SECTOR_SIZE;
-                    }
-
-                    /* Do we already have the file open? We protect the cache
-                     * against concurrent access from sync and async threads. */
-#ifdef SWAP_STATS
-                    uint64_t t0 = os_get_clock();
-#endif
-                    if (hashtable_find(&s->open_files, (uint64_t)(uintptr_t)tuple,
-                                &line)) {
-                        /* We had a mapping cached already. */
-                        file = (SwapMappedFile*) lru_cache_touch_line(fc, line)->value;
-                    }
-
-                    if (!file) {
-                        /* No cached mapping for the file. Need to create one. */
-                        const char *filename = s->map_strings + tuple->name_offset;
-
-                        /* Completely seperate the file open logic of WIN32 from OSX. This helps
-                           quite a bit with readability. */
-#ifdef _WIN32
-                        swap_handle_t tmp_handle = SWAP_INVALID_HANDLE;
-                        /* In the case of WIN32, open the original file and compare its timestamp
-                           with the timestamp of map.idx. If the creation-time of the file is newer,
-                           use the copy from the cow directory. Since CoWed files are expected to
-                           be much lesser in number than original files this approach is better. */
-
-#if !defined(LIBIMG) && defined(SWAP_STATS)
-                        debug_printf("swap: open %s\n", filename);
-#endif
-
-                        /* Open by file-id */
-                        LARGE_INTEGER file_id;
-                        file_id.HighPart = tuple->file_id_highpart;
-                        file_id.LowPart = tuple->file_id_lowpart;
-
-                        handle = swap_open_file_by_id(s->volume, file_id.QuadPart);
-
-                        if (handle != SWAP_INVALID_HANDLE) {
-                            /* Check that the file was modified before the template was created. */
-                            LARGE_INTEGER file_modification_time;
-                            if (!GetFileTime(handle, NULL, NULL, (LPFILETIME)&file_modification_time)) {
-                                debug_printf("Error in getting file modification time for [0x%"PRIx64"] : [%d]\n",
-                                                file_id.QuadPart, (int)GetLastError());
-                                debug_printf("Will use file without caring about if it is newer or not.\n");
-                            } else if (file_modification_time.QuadPart > s->map_file_creation_time.QuadPart){
-                                /* This file was modified after the init. The original copy will be CoWed.
-                                   Hence cache this handle and go ahead and open from cow directory.
-                                   Note that a difference in timezones could also cause this symptom. */
-                                tmp_handle = handle;
-                                handle = SWAP_INVALID_HANDLE;
-                            }
-                        }
-
-                        /* Check if a CoW backup is needed and exists. */
-                        if (handle == SWAP_INVALID_HANDLE && s->cow_backup) {
-                            /* 16 bytes for name, ".copy" is 5, '/' is 1, '\0' is 1 */
-                            char cow[strlen(s->cow_backup) + 24];
-                            sprintf(cow, "%s/%08X%08X.copy", s->cow_backup,
-                                        tuple->file_id_highpart, tuple->file_id_lowpart);
-
-                            handle = open_file_readonly(cow);
-                            if (handle != SWAP_INVALID_HANDLE) {
-                                debug_printf("swap: open [%s] backed up by cow file [%s]\n", filename, cow);
-                            }
-                        }
-
-                        if (handle == SWAP_INVALID_HANDLE) {
-                            /* Ultimately try opening the file from the path or cached file-id.
-                               Note that it may just be due to timezone issues that the
-                               file has a newer time-stamp and has not been CoWed. */
-                            debug_printf("swap: unable to open shallow %s"
-                                  " from cow; opening using file-id or path.\n",
-                                  filename);
-                            if (tmp_handle != SWAP_INVALID_HANDLE) {
-                                /* small optimization: use the open from file-id*/
-                                handle = tmp_handle;
-                                tmp_handle = SWAP_INVALID_HANDLE;
-                            } else {
-                                handle = open_file_readonly(filename);
-                            }
-                        }
-
-                        if (tmp_handle != SWAP_INVALID_HANDLE) {
-                            close_file(tmp_handle);
-                            tmp_handle = SWAP_INVALID_HANDLE;
-                        }
-
-#else
-
-                        /* First see if a CoW backup exists for this file. */
-                        if (s->cow_backup) {
-                            /* Use the index into the map as the file id,
-                             * kernel module uses same naming convention. */
-
-                            /* 8 bytes for name, ".copy" is 5, '/' is 1, '\0' is 1 */
-                            char cow[strlen(s->cow_backup) + 16];
-                            uint32_t id = tuple - s->map_idx;
-                            sprintf(cow, "%s/%u.copy", s->cow_backup, id);
-
-                            handle = open_file_readonly(cow);
-                        }
-
-                        if (handle == SWAP_INVALID_HANDLE) {
-                            /* When no CoW backup, use the normal shallow file name. */
-                            handle = open_file_readonly(filename);
-                        }
-#endif
-
-                        /* No CoW file and no orig. shallow file. We're doomed. */
-                        if (handle == SWAP_INVALID_HANDLE) {
-                            Wwarn("swap: failed to open shallow %s", filename);
-                            goto next;
-                        }
-
-                        /* Is this a small file that we can always read in one go,
-                         * then we will perform the read now and continue to the
-                         * next block without caching anything. */
-                        if (SWAP_SECTOR_SIZE * tuple->size <= take) {
-                            if (swap_pread(handle, buffer + readOffset, take,
-                                        SWAP_SECTOR_SIZE *
-                                        ((block - tuple_start) +
-                                        tuple->file_offset)) < 0) {
-                                Wwarn("swap: failed to read shallow %s",
-                                      filename);
-                                close_file(handle);
-                                goto next;
-                            }
-                            close_file(handle);
-                            /* On to the next block in our read. */
-                            ++j;
-#ifdef SWAP_STATS
-                            swap_stats.shallow_miss += os_get_clock() - t0;
-#endif
-                            continue;
-                        }
-
-                        /* File is big enough that we will bother with mapping
-                         * it. The swap_map_file() function will close the file
-                         * handle after use. */
-                        file = malloc(sizeof(SwapMappedFile));
-                        if (!file) {
-                            /* Treat malloc failing here just like an open or
-                             * read error, by returning zeroes to the VM. Because
-                             * we're not on the main thread, we cannot throw an
-                             * err(), but quite likely the other threads are
-                             * going to fail soon anyway. */
-                            warnx("swap: OOM %s %d", __FUNCTION__, __LINE__);
-                            goto next;
-                        }
-
-                        r = swap_map_file(handle,
-                                SWAP_SECTOR_SIZE * tuple->file_offset,
-                                SWAP_SECTOR_SIZE * tuple->size, file);
-                        if (r < 0) {
-                            Wwarn("swap: mapping %s fails", filename);
-                            free(file);
-                            goto next;
-                        }
-#ifndef _WIN32
-                        /* Under POSIX, tell the OS we will likely be needing the
-                         * whole file, so it can start prefetching. XXX measure
-                         * this. */
-                        posix_madvise(file->mapping, file->size,
-                                POSIX_MADV_SEQUENTIAL | POSIX_MADV_WILLNEED);
-#endif
-
-                        /* Insert newly mapped file into file cache. */
-                        line = lru_cache_evict_line(fc);
-                        LruCacheLine *cl = lru_cache_touch_line(fc, line);
-
-                        if (cl->key) {
-                            /* Remove evicted entry's key from hash table. */
-                            hashtable_delete(&s->open_files, (uint64_t)(uintptr_t)cl->key);
-                            evicted = (SwapMappedFile*) cl->value;
-                        }
-                        cl->value = (uintptr_t) file;
-                        cl->key = (uintptr_t) tuple;
-
-                        hashtable_insert(&s->open_files, (uint64_t)(uintptr_t)tuple, line);
-#ifdef SWAP_STATS
-                        swap_stats.shallow_miss += os_get_clock() - t0;
-#endif
-                    }
-
-                    if (evicted) {
-                        swap_unmap_file(evicted);
-                        free(evicted);
-                    }
-
-                    /* Figure out what to copy from file mapping, taking into account
-                     * the offset of the shallow mapping and the modulo wrt the host
-                     * OS' page granularity. */
-                    map_offset = SWAP_SECTOR_SIZE * (block - tuple_start) +
-                        file->modulo;
-
-                    /* Only begin read before EOF. */
-                    if (map_offset < file->size) {
-                        /* Cap read to not go past EOF. */
-                        if (map_offset + take > file->size) {
-                            take = file->size - map_offset;
-                        }
-                        /* Read from the mapping. */
-#ifdef SWAP_STATS
-                        uint64_t t0 = os_get_clock();
-#if 0
-                        debug_printf("swap-stat: read fn=%s offset=%"PRIx64" take=%"PRIx64"\n",
-                                filename,
-                                map_offset, take);
-#endif
-#endif
-                        if (s->log_swap_fills) {
-                            const char *filename = s->map_strings + tuple->name_offset;
-                            debug_printf("swap_fill_read_holes {\"filename\":\"%s\","
-                                    " \"take\":0x%"PRIx64","
-                                    " \"offset\":0x%"PRIx64"}\n",
-                                    filename,
-                                    take,
-                                    map_offset);
-                        }
-                        memcpy(buffer + readOffset,
-                                (uint8_t*)file->mapping + map_offset, take);
-#ifdef SWAP_STATS
-                        swap_stats.shallowed += take;
-                        swap_stats.shallow_read += os_get_clock() - t0;
-#endif
-                    }
-
-                    /* Increment j by how many blocks we were supposed to read,
-                     * as we have zero-filled any blocks we did not manage to
-                     * get from shallow files (memset above). */
-next:
-                    j += blocks_available;
-
-                } else {
-                    /* try next block, really, don't just silently
-                     * skip...  because guess what, that actually
-                     * causes incorrect data to be returned *sigh* */
-                    j++;
-                }
-
-            }
-
-            reading = 0;
-            j = 0;
-
-        }
-
-        if (i == length) break;
-
-        if (!reading && map[i] == 0) {
-            reading = 1;
-            j = i;
-        }
-    }
-    critical_section_leave(&s->shallow_mutex);
-    return 0;
-}
-
 static inline void swap_common_cb(SwapAIOCB *acb)
 {
     BDRVSwapState *s = (BDRVSwapState*) acb->bs->opaque;
@@ -1800,67 +1055,6 @@ static inline void complete_read_acb(SwapAIOCB *acb)
         ioh_event_set(&acb->event);
     }
 }
-
-#ifdef _WIN32
-static DWORD WINAPI swap_read_thread(void *_s)
-#else
-static void * swap_read_thread(void *_s)
-#endif
-{
-    BDRVSwapState *s = (BDRVSwapState*) _s;
-    SwapAIOCB *acb;
-
-    for (;;) {
-
-        for (;;) {
-            int quit;
-
-            swap_lock(s);
-            acb = s->read_queue_head;
-            quit = s->quit;
-            s->read_queue_head = NULL;
-            swap_unlock(s);
-
-            if (acb)
-                break; /* process reads. */
-            else if (quit) {
-                debug_printf("%s exiting cleanly\n", __FUNCTION__);
-                return 0; /* quit. */
-            } else
-                swap_wait_read(s);
-        }
-
-
-#ifdef SWAP_STATS
-        SwapAIOCB *a = acb;
-        while (a) {
-            swap_stats.pre_proc_wait += os_get_clock() - acb->t0;
-            a = a->next;
-       }
-#endif
-
-        while (acb) {
-            /* Squirrel acb->next for the case where acb may get freed
-             * by a callback triggered by IO completion. */
-            SwapAIOCB *next = acb->next;
-
-            uint8_t *b = acb->tmp ? acb->tmp : acb->buffer;
-            int r = swap_fill_read_holes(s, acb->block * SWAP_SECTOR_SIZE,
-                    acb->size, b, acb->map);
-            if (r < 0) {
-                acb->result = r;
-            }
-
-#ifdef SWAP_STATS
-            acb->t1 = os_get_clock();
-#endif
-            complete_read_acb(acb);
-            acb = next;
-        }
-    }
-    /* Never reached. */
-}
-
 
 static SwapAIOCB *swap_aio_get(BlockDriverState *bs,
         BlockDriverCompletionFunc *cb, void *opaque)
@@ -1963,6 +1157,8 @@ static void dubtree_read_complete_cb(void *opaque, int result)
                     memcpy(o, tmp, count);
                 }
                 t += sz;
+            } else {
+                memset(o, 0, SWAP_SECTOR_SIZE);
             }
 
             o += SWAP_SECTOR_SIZE;
@@ -2041,16 +1237,14 @@ static inline void __swap_queue_read_acb(BlockDriverState *bs, SwapAIOCB *acb)
 
     __sync_fetch_and_add(&acb->splits, 2);
     r = __swap_dubtree_read(s, acb);
+#if 0 /* we used to have this to trigger fill-in reads from shallow backing */
     if (r > 0) {
         __sync_fetch_and_add(&acb->splits, 1);
-        if (s->read_queue_head == NULL) {
-            s->read_queue_head = s->read_queue_tail = acb;
-        } else {
-            s->read_queue_tail->next = acb;
-            s->read_queue_tail = acb;
-        }
         swap_signal_read(s);
     }
+#else
+    (void) r;
+#endif
     complete_read_acb(acb);
 }
 
@@ -2459,29 +1653,13 @@ int swap_flush(BlockDriverState *bs)
 
     /* Quiesce dubtree and release caches. */
     swap_lock(s);
-    critical_section_enter(&s->shallow_mutex);
-    /* Close cached file mappings. */
-    for (i = 0; i < (1 << s->fc.log_lines); ++i) {
-        SwapMappedFile *mf = (SwapMappedFile*) s->fc.lines[i].value;
-        if (mf) {
-            swap_unmap_file(mf);
-            free(mf);
-        }
-    }
-    lru_cache_clear(&s->fc);
     hashtable_clear(&s->open_files);
-    /* Close cached dubtree file handles. */
-    dubtree_quiesce(&s->t);
     if (s->find_context) {
         dubtree_end_find(&s->t, s->find_context);
         s->find_context = NULL;
     }
-    critical_section_leave(&s->shallow_mutex);
     s->flush = 0;
     swap_unlock(s);
-
-    //debug_printf("%s done, %d allocs\n", __FUNCTION__,
-            //__sync_fetch_and_add(&s->alloced, 0));
     return 0;
 }
 #endif
@@ -2490,7 +1668,6 @@ void swap_close(BlockDriverState *bs)
 {
     debug_printf("%s\n", __FUNCTION__);
     BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
-    int i;
 
 #if 0
     printf("checking...\n");
@@ -2507,44 +1684,20 @@ void swap_close(BlockDriverState *bs)
     swap_signal_insert(s);
     wait_thread(s->insert_thread);
 
-    swap_signal_read(s);
-    wait_thread(s->read_thread);
-
     if (s->find_context) {
         dubtree_end_find(&s->t, s->find_context);
         s->find_context = NULL;
     }
     dubtree_close(&s->t);
 
-    if (s->shallow_map.mapping) {
-        swap_unmap_file(&s->shallow_map);
-    }
-    free(s->cow_backup);
-
-#ifdef _WIN32
-    if (s->volume != INVALID_HANDLE_VALUE) {
-        CloseHandle(s->volume);
-    }
-#endif
-
     thread_event_close(&s->all_flushed_event);
-    thread_event_close(&s->read_event);
     thread_event_close(&s->write_event);
     thread_event_close(&s->can_write_event);
 
     critical_section_free(&s->mutex);
-    critical_section_free(&s->shallow_mutex);
 
-    /* Close cached file mappings. */
-    for (i = 0; i < (1 << s->fc.log_lines); ++i) {
-        SwapMappedFile *mf = (SwapMappedFile*) s->fc.lines[i].value;
-        if (mf) {
-            swap_unmap_file(mf);
-        }
-    }
     lru_cache_close(&s->bc);
     hashtable_clear(&s->cached_blocks);
-    lru_cache_close(&s->fc);
     hashtable_clear(&s->open_files);
 }
 
