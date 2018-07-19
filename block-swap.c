@@ -2591,8 +2591,8 @@ int swap_create(const char *filename, int64_t size, int flags)
     return ret;
 }
 
-#if 0
-static int swap_ioctl(BlockDriverState *bs, unsigned long int req, void *buf)
+
+int swap_ioctl(BlockDriverState *bs, unsigned long int req, void *buf)
 {
     BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
     if (req == 0) {
@@ -2615,7 +2615,6 @@ static int swap_ioctl(BlockDriverState *bs, unsigned long int req, void *buf)
     }
     return -ENOTSUP;
 }
-#endif
 
 #if 0
 BlockDriver bdrv_swap = {

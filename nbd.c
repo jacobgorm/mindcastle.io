@@ -9,12 +9,15 @@
 #include <linux/nbd.h>
 #include <linux/types.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 #include <unistd.h>
+#include <uuid/uuid.h>
 
 #include "config.h"
 #include "aio.h"
@@ -41,6 +44,27 @@ struct read_info {
 };
 
 static void got_data(void *opaque);
+
+static void shell(char *arg, ...) {
+    char *list[16];
+    int l = 0;
+    va_list ap;
+    va_start(ap, arg);
+    char *a = arg;
+    while (a) {
+        list[l++] = a;
+        a = va_arg(ap, char *);
+    }
+    list[l] = NULL;
+
+    if (!fork()) {
+        if (execvp(list[0], list)) {
+            err(1, "execvp error");
+        }
+        va_end(ap);
+        exit(1);
+    }
+}
 
 static void nbd_read_done(void *opaque, int ret) {
     int r;
@@ -95,15 +119,11 @@ static void got_data(void *opaque)
 
             case NBD_CMD_DISC: {
                 printf("got disc\n");
-                swap_close(ci->bs);
-                exit(0);
                 break;
             }
 
             case NBD_CMD_READ: {
-    //            r = write(ci->sock, &reply, sizeof(reply));
                 int len = ntohl(request.len);
-                //uint64_t offset =  ntohll(request.from);
                 uint64_t offset =  be64toh(request.from);
                 struct read_info *ri = malloc(sizeof(struct read_info));
                 ri->ci = ci;
@@ -149,25 +169,29 @@ static void got_data(void *opaque)
 }
 
 volatile int should_exit = 0;
-volatile int should_flush = 0;
+volatile int should_close = 0;
 static BlockDriverState bs;
 
 void signal_handler(int s)
 {
-    if (s == 2) {
+    if (s == SIGINT) {
         should_exit = 1;
-    } else if (s == 1) {
-        should_flush = 1;
+    } else if (s == SIGHUP) {
+        should_close = 1;
     }
 }
 
 int main(int argc, char **argv)
 {
     int r;
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s [filename.swap]\n", argv[0]);
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s [filename.swap] [statechange-script]\n", argv[0]);
         exit(1);
     }
+    char *script = argv[2];
+
+    shell("modprobe", "nbd", NULL);
+
     r = mlockall(MCL_CURRENT | MCL_FUTURE);
     if (r < 0) {
         err(1, "mlockall failed");
@@ -207,9 +231,19 @@ int main(int argc, char **argv)
         err(1, "socketpair (b) failed");
     }
 
-    int device = open("/dev/nbd0", O_RDWR);
-    if (device < 0) {
-        err(1, "nbd device open failed");
+    char dev[32];
+    int device;
+    for (int i = 0; i < 16; ++i) {
+        sprintf(dev, "/dev/nbd%u", i);
+        device = open(dev, O_RDWR);
+        if (device < 0) {
+            if (errno == EBUSY) {
+                continue;
+            } else {
+                err(1, "nbd device open failed");
+            }
+        }
+        break;
     }
 
     r = ioctl(device, NBD_SET_SIZE_BLOCKS, 1000 << 20);
@@ -233,7 +267,8 @@ int main(int argc, char **argv)
     }
 
     int ok = 0;
-    if (!fork()) {
+    int child = fork();
+    if (child == 0) {
         close(sp[0]);
         if(ioctl(device, NBD_SET_SOCK, sp[1]) == -1){
             fprintf(stderr, "NBD_SET_SOCK failed %s\n", strerror(errno));
@@ -262,54 +297,47 @@ int main(int argc, char **argv)
         exit(1);
     }
 
+    int needs_format = 0;
     if (!file_exists(fn)) {
         swap_create(fn, 100 << 20, 0);
+        needs_format = 1;
     }
     swap_open(&bs, fn, 0);
+    uuid_t uuid;
+    swap_ioctl(&bs, 0, uuid);
+    char uuid_str[37];
+    uuid_unparse_lower(uuid, uuid_str);
+
+    char pid_str[16];
+    sprintf(pid_str, "%d", getpid());
+
+    setenv("DEVICE", dev, 1);
+    setenv("UUID", uuid_str, 1);
+    setenv("PID", pid_str, 1);
+
+    if (needs_format) {
+        shell(script, "create", NULL);
+    } else {
+        shell(script, "open", NULL);
+    }
 
     struct client_info *ci = malloc(sizeof(struct client_info));
     ci->sock = sp[0];
     ci->bs = &bs;
     swap_aio_add_wait_object(ci->sock, got_data, ci);
 
-
-#if 0
-
-    int sock = socket(PF_INET, SOCK_STREAM, 0);
-    if (sock < 0) {
-        fprintf(stderr, "socket failed");
-        exit(1);
-    }
-    int optval = 1;
-    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof optval);
-
-    struct sockaddr_in addr = {};
-    int port = 8081;
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = INADDR_ANY;
-    r = bind(sock, (struct sockaddr*)&addr, sizeof(addr));
-    assert(r >= 0);
-    r = listen(sock, 1);
-    assert(r >= 0);
-
-    struct sock_info si;
-    si.sock = sock;
-    ioh_event_init_fd(&si.event, sock);
-    aio_add_wait_object(&si.event, got_client, &si);
-#endif
-
-
-
-
-    //uint8_t buf[8 * 512] = {1,};
-    //swap_aio_write(&bs, 1, buf, 8, write_done, NULL);
     while (!should_exit) {
-        if (swap_aio_wait() == 1 || should_flush) {
-            swap_flush(&bs);
-            should_flush = 0;
+        swap_aio_wait();
+        if (should_close) {
+            shell(script, "close", NULL);
+            should_close = 0;
         }
     }
+    ioctl(device, NBD_DISCONNECT);
+    ioctl(device, NBD_CLEAR_SOCK);
+    int wstatus;
+    waitpid(child, &wstatus, 0);
+
     swap_flush(&bs);
     dump_swapstat();
     swap_close(&bs);
