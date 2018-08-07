@@ -414,12 +414,15 @@ typedef struct {
     CURL *chs[2];
     int active;
     int synchronous;
+    int paused;
     int size;
     int fd;
     uint32_t split;
     uint32_t offset;
-    uint8_t *buffer; // XXX mmap this
-    volatile int num_blocked;
+    uint8_t *buffer;
+    critical_section blocked_lock;
+    int num_blocked;
+    int num_unblocked;
     struct {
         CallbackState *cs;
         uint8_t *dst;
@@ -434,6 +437,7 @@ static inline HttpGetState *hgs_ref(HttpGetState *hgs) {
 
 static inline void hgs_deref(HttpGetState *hgs) {
     if (--(hgs->refcount) == 0) {
+        critical_section_free(&hgs->blocked_lock);
         free(hgs->url);
         free(hgs);
     }
@@ -480,13 +484,14 @@ static int execute_reads(DubTree *t,
                 hgs->split = hgs->offset = first->src_offset;
             }
             increment_counter(cs);
-            int num_blocked = __sync_fetch_and_add(&hgs->num_blocked, 0);
+            critical_section_enter(&hgs->blocked_lock);
+            int num_blocked = hgs->num_blocked++;
             assert(num_blocked < MAX_BLOCKED_READS); //XXX
             hgs->blocked_reads[num_blocked].cs = cs;
             hgs->blocked_reads[num_blocked].dst = dst;
             hgs->blocked_reads[num_blocked].first = first;
             hgs->blocked_reads[num_blocked].n = n;
-            __sync_fetch_and_add(&hgs->num_blocked, 1);
+            critical_section_leave(&hgs->blocked_lock);
         }
         return 0;
     }
@@ -1181,7 +1186,9 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
     memcpy(hgs->buffer + hgs->offset, ptr, size * nmemb);
     hgs->offset += size * nmemb;
 
-    for (int i = 0; i < __sync_fetch_and_add(&hgs->num_blocked, 0); ++i) {
+    critical_section_enter(&hgs->blocked_lock);
+    int num_blocked = hgs->num_blocked;
+    for (int i = 0; i < num_blocked; ++i) {
         Read *first = hgs->blocked_reads[i].first;
         if (first) {
             int n = hgs->blocked_reads[i].n;
@@ -1194,9 +1201,11 @@ static size_t curl_data_cb2(void *ptr, size_t size, size_t nmemb, void *opaque)
                 hgs->blocked_reads[i].first = NULL;
                 decrement_counter(hgs->blocked_reads[i].cs);
                 free(first);
+                ++(hgs->num_unblocked);
             }
         }
     }
+    critical_section_leave(&hgs->blocked_lock);
 
     if ((hgs->offset == hgs->size) || (hgs->offset == hgs->split)) {
         if (hgs->split > 0 && hgs->offset > hgs->split) {
@@ -1245,6 +1254,7 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
         err(1, "unable to create tmp file\n");
     }
     HttpGetState *hgs = hgs_ref(calloc(1, sizeof(*hgs)));
+    critical_section_init(&hgs->blocked_lock);
     fprintf(stderr, "%p fetching %s s=%d...\n", hgs, url, synchronous);
     hgs->t0 = rtc();
     hgs->chunk_id = chunk_id;
