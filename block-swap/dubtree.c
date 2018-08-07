@@ -351,7 +351,7 @@ static void decrypt_read(void *opaque, int result)
         for (int i = 0; i < ds->num_keys; ++i, hash += CRYPTO_TAG_SIZE) {
             int size = ds->sizes[i];
             if (size > 0) {
-                uint8_t tmp[DUBTREE_BLOCK_SIZE];
+                uint8_t tmp[2 * DUBTREE_BLOCK_SIZE];
                 ds->sizes[i] = decrypt256(ds->crypto, tmp, src + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE, hash, src);
                 memcpy(dst, tmp, size);
                 src += size;
