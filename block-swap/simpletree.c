@@ -102,7 +102,25 @@ void simpletree_open(SimpleTree *st, Crypto *crypto, int fd, hash_t hash)
     }
 
     st->user_data = malloc(meta->user_size);
-    memcpy(st->user_data, (uint8_t *) meta + sizeof(*meta), meta->user_size);
+    if (meta->user_size <= (SIMPLETREE_NODESIZE - sizeof(*meta))) {
+        memcpy(st->user_data, (uint8_t *) meta + sizeof(*meta), meta->user_size);
+    } else {
+        node_t n = meta->num_nodes - (meta->user_size + SIMPLETREE_NODESIZE -
+                1) / SIMPLETREE_NODESIZE;
+        int take;
+        int left;
+        uint8_t *out = st->user_data;
+        hash_t user_hash = meta->first_user_hash;
+        const int capacity = SIMPLETREE_NODESIZE - sizeof(SimpleTreeUserNode);
+        for (left = meta->user_size; left > 0; left -= take, ++n, out += take) {
+            take = left < capacity ? left : capacity;
+            const SimpleTreeUserNode *un = &get_node_hash(st, n, user_hash)->u.un;
+            user_hash = un->next_hash;
+            memcpy(out, un->data, take);
+            put_node(st, n);
+        }
+        printf("done\n");
+    }
 
     assert(meta->magic == 0xfedeabe0);
     put_node(st, 0);
@@ -202,6 +220,14 @@ static inline node_t create_leaf_node(SimpleTree *st)
     ln = &get_node(st, n)->u.ln;
     ln->count = 0;
     ln->next = 0;
+    put_node(st, n);
+    return n;
+}
+
+static inline node_t create_user_node(SimpleTree *st)
+{
+    node_t n = alloc_node(st);
+    set_node_type(st, n, SimpleTreeNode_User);
     put_node(st, n);
     return n;
 }
@@ -322,27 +348,40 @@ void simpletree_finish(SimpleTree *st)
     put_node(st, 0);
 }
 
-static hash_t encrypt_node(SimpleTree *st, node_t n, hash_t next_hash, int depth)
+static hash_t encrypt_node(SimpleTree *st, node_t n, hash_t next_hash)
 {
     SimpleTreeNode *sn = get_node(st, n);
     SimpleTreeNodeType type = sn->type;
     if (type == SimpleTreeNode_Meta) {
         SimpleTreeMetaNode *meta = get_meta(st);
         hash_t nil = {};
-        meta->root_hash = encrypt_node(st, meta->root, nil, 1 + depth);
-        meta->first_hash = st->first_hash;
+        meta->root_hash = encrypt_node(st, meta->root, nil);
+        meta->first_child_hash = st->first_child_hash;
+        if (meta->user_size > (SIMPLETREE_NODESIZE - sizeof(*meta))) {
+            node_t first = meta->num_nodes - (meta->user_size + SIMPLETREE_NODESIZE -
+                    1) / SIMPLETREE_NODESIZE;
+            node_t n = meta->num_nodes - 1;
+            hash_t user_hash = {};
+            for (; n >= first; --n) {
+                user_hash = encrypt_node(st, n, user_hash);
+            }
+            meta->first_user_hash = user_hash;
+        }
     } else if (type == SimpleTreeNode_Inner) {
         SimpleTreeInnerNode *in = &sn->u.in;
         hash_t neighbor_hash = st->tmp_hash;
         for (int i = in->count; i >= 0; --i) {
             if (in->children[i]) {
                 neighbor_hash = in->child_hashes[i] =
-                    encrypt_node(st, in->children[i], neighbor_hash, 1 + depth);
+                    encrypt_node(st, in->children[i], neighbor_hash);
             }
         }
     } else if (type == SimpleTreeNode_Leaf) {
         SimpleTreeLeafNode *ln = &sn->u.ln;
         ln->next_hash = next_hash;
+    } else if (type == SimpleTreeNode_User) {
+        SimpleTreeUserNode *un = &sn->u.un;
+        un->next_hash = next_hash;
     }
 
     hash_t hash;
@@ -353,7 +392,7 @@ static hash_t encrypt_node(SimpleTree *st, node_t n, hash_t next_hash, int depth
     memcpy(sn, tmp, SIMPLETREE_NODESIZE);
 
     if (type == SimpleTreeNode_Leaf) {
-        st->first_hash = hash;
+        st->first_child_hash = hash;
         st->tmp_hash = hash;
     }
 
@@ -364,7 +403,7 @@ static hash_t encrypt_node(SimpleTree *st, node_t n, hash_t next_hash, int depth
 hash_t simpletree_encrypt(SimpleTree *st)
 {
     hash_t nil = {};
-    st->hash = encrypt_node(st, 0, nil, 0);
+    st->hash = encrypt_node(st, 0, nil);
     assert(st->hash.first64);
     return st->hash;
 }
@@ -457,17 +496,16 @@ void simpletree_set_user(SimpleTree *st, const void *data, size_t size)
     if (size <= (SIMPLETREE_NODESIZE - sizeof(*meta))) {
         memcpy((uint8_t *) meta + sizeof(*meta), data, size);
     } else {
-        assert(0);
         int take;
         int left;
         const uint8_t *in = data;
-        uint8_t *out;
+        const int capacity = SIMPLETREE_NODESIZE - sizeof(SimpleTreeUserNode);
         for (left = size; left > 0; in += take, left -= take) {
-            take = left < SIMPLETREE_NODESIZE ? left : SIMPLETREE_NODESIZE;
-            node_t n = alloc_node(st);
-            out = (uint8_t *) get_node(st, n);
-            memcpy(out, in, take);
-            memset(out + take, 0, SIMPLETREE_NODESIZE - take);
+            take = left < capacity ? left : capacity;
+            node_t n = create_user_node(st);
+            SimpleTreeUserNode *un = &get_node(st, n)->u.un;
+            memcpy(un->data, in, take);
+            memset(un->data + take, 0, capacity - take);
             put_node(st, n);
         }
     }

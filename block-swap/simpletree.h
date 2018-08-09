@@ -12,7 +12,8 @@ typedef uint32_t node_t;
 typedef struct SimpleTreeMetaNode {
     node_t root;        /* root node offset */
     node_t first;       /* leftmost leaf node offset */
-    hash_t first_hash;
+    hash_t first_child_hash;
+    hash_t first_user_hash;
     int maxLevel;       /* Height of tree */
     uint32_t magic;
     uint32_t num_nodes;
@@ -32,7 +33,8 @@ typedef struct SimpleTree {
     uint8_t *user_data;
     uint64_t size;
     hash_t hash;
-    hash_t first_hash;
+    hash_t first_child_hash;
+    hash_t first_user_hash;
     hash_t tmp_hash;
     Crypto *crypto;
     int is_encrypted;
@@ -79,11 +81,17 @@ typedef struct SimpleTreeLeafNode {
     SimpleTreeValue values[SIMPLETREE_LEAF_M];
 } SimpleTreeLeafNode ;
 
+typedef struct SimpleTreeUserNode {
+    hash_t next_hash;
+    uint8_t data[0];
+} SimpleTreeUserNode ;
+
 typedef enum {
     SimpleTreeNode_Free = 0,
     SimpleTreeNode_Meta = 1,
     SimpleTreeNode_Inner = 2,
     SimpleTreeNode_Leaf = 3,
+    SimpleTreeNode_User = 4,
 } SimpleTreeNodeType;
 
 typedef struct SimpleTreeNode {
@@ -92,6 +100,7 @@ typedef struct SimpleTreeNode {
         SimpleTreeMetaNode mn;
         SimpleTreeLeafNode ln;
         SimpleTreeInnerNode in;
+        SimpleTreeUserNode un;
     } u;
 } SimpleTreeNode;
 
@@ -167,7 +176,7 @@ static inline void simpletree_begin(SimpleTree *st, SimpleTreeIterator *it)
 {
     SimpleTreeMetaNode *meta = get_meta(st);
     it->node = meta->first;
-    it->hash = meta->first_hash;
+    it->hash = meta->first_child_hash;
     assert(it->hash.first64);
     it->index = 0;
     put_node(st, 0);
