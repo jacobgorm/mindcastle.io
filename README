@@ -14,6 +14,9 @@ To build on debian/ubuntu, you need to install:
 * libcurl4-gnutls-dev (or other libcurl-dev package)
 * uuid-dev
 
+And to run well you should have the "haveged" entropy gathering service
+installed and running.
+
 Then you can build with:
 
 $ make
