@@ -277,6 +277,7 @@ int main(int argc, char **argv)
 
     }
     swap_flush(&bs);
+    swap_close(&bs);
     printf("test complete\n");
     return 0;
 }

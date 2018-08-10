@@ -108,13 +108,16 @@ int dubtree_init(DubTree *t,
     void *m;
     asprintf(&mn, "%s/"DUBTREE_MMAPPED_NAME, fn);
     dubtree_handle_t f = dubtree_open_existing(mn);
-    if (invalid_handle(f)) {
+    if (invalid_handle(f) && errno == EEXIST) {
         f = dubtree_open_new(mn, 0);
         if (invalid_handle(f)) {
             printf("unable to open %s: %s\n", mn, strerror(errno));
             return -1;
         }
         dubtree_set_file_size(f, sizeof(DubTreeHeader));
+    } else {
+        printf("unable to open or create %s: %s\n", mn, strerror(errno));
+        return -1;
     }
 
 #ifdef _WIN32
@@ -2065,8 +2068,8 @@ int dubtree_sanity_check(DubTree *t)
             int idx = -1;
             while (!simpletree_at_end(&st, &it)) {
                 SimpleTreeResult k;
-                uint8_t in[DUBTREE_BLOCK_SIZE];
-                uint8_t out[DUBTREE_BLOCK_SIZE];
+                uint8_t in[2 * DUBTREE_BLOCK_SIZE];
+                //uint8_t out[DUBTREE_BLOCK_SIZE];
                 chunk_id_t chunk_id;
                 int l;
                 int got;
@@ -2089,6 +2092,7 @@ int dubtree_sanity_check(DubTree *t)
 
                 int sz = k.value.size;
                 if (sz < DUBTREE_BLOCK_SIZE) {
+#if 0
                     int unsz = LZ4_decompress_safe((const char*)in, (char*)out,
                                                    sz, DUBTREE_BLOCK_SIZE);
                     if (unsz != DUBTREE_BLOCK_SIZE) {
@@ -2096,6 +2100,7 @@ int dubtree_sanity_check(DubTree *t)
                                k.value.offset, sz);
                         return -1;
                     }
+#endif
                 }
 
                 simpletree_next(&st, &it);
