@@ -83,7 +83,7 @@ typedef struct SimpleTreeLeafNode {
 
 typedef struct SimpleTreeUserNode {
     hash_t next_hash;
-    uint8_t data[0];
+    uint8_t data[SIMPLETREE_USER_CAPACITY];
 } SimpleTreeUserNode ;
 
 typedef enum {
@@ -177,7 +177,7 @@ static inline void simpletree_begin(SimpleTree *st, SimpleTreeIterator *it)
     SimpleTreeMetaNode *meta = get_meta(st);
     it->node = meta->first;
     it->hash = meta->first_child_hash;
-    assert(it->hash.first64);
+    //assert(it->hash.first64);
     it->index = 0;
     put_node(st, 0);
 }
@@ -185,12 +185,12 @@ static inline void simpletree_begin(SimpleTree *st, SimpleTreeIterator *it)
 static inline void simpletree_next(SimpleTree *st, SimpleTreeIterator *it)
 {
     node_t n = it->node;
-    assert(it->hash.first64);
+    //assert(it->hash.first64);
     SimpleTreeLeafNode *ln = &get_node_hash(st, n, it->hash)->u.ln;
     if (++(it->index) == ln->count) {
         it->node = ln->next;
         it->hash = ln->next_hash;
-        assert(it->node == 0 || it->hash.first64);
+        //assert(it->node == 0 || it->hash.first64);
         it->index = 0;
     }
     put_node(st, n);

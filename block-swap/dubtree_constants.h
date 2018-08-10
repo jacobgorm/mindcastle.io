@@ -14,6 +14,8 @@
 #define CRYPTO_KEY_SIZE (256 / 8)
 #define CRYPTO_TAG_SIZE (128 / 8)
 
+#define SIMPLETREE_USER_CAPACITY (SIMPLETREE_NODESIZE - (CRYPTO_IV_SIZE + CRYPTO_TAG_SIZE + sizeof(uint32_t)))
+
 typedef union {
     uint64_t first64;
     uint8_t bytes[128 / 8];

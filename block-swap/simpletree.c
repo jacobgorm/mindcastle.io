@@ -102,7 +102,7 @@ void simpletree_open(SimpleTree *st, Crypto *crypto, int fd, hash_t hash)
     }
 
     st->user_data = malloc(meta->user_size);
-    if (meta->user_size <= (SIMPLETREE_NODESIZE - sizeof(*meta))) {
+    if (meta->user_size <= (SIMPLETREE_NODESIZE - (CRYPTO_IV_SIZE + sizeof(*meta)))) {
         memcpy(st->user_data, (uint8_t *) meta + sizeof(*meta), meta->user_size);
     } else {
         node_t n = meta->num_nodes - (meta->user_size + SIMPLETREE_NODESIZE -
@@ -111,17 +111,14 @@ void simpletree_open(SimpleTree *st, Crypto *crypto, int fd, hash_t hash)
         int left;
         uint8_t *out = st->user_data;
         hash_t user_hash = meta->first_user_hash;
-        const int capacity = SIMPLETREE_NODESIZE - sizeof(SimpleTreeUserNode);
         for (left = meta->user_size; left > 0; left -= take, ++n, out += take) {
-            take = left < capacity ? left : capacity;
             const SimpleTreeUserNode *un = &get_node_hash(st, n, user_hash)->u.un;
             user_hash = un->next_hash;
+            take = left < sizeof(un->data) ? left : sizeof(un->data);
             memcpy(out, un->data, take);
             put_node(st, n);
         }
-        printf("done\n");
     }
-
     assert(meta->magic == 0xfedeabe0);
     put_node(st, 0);
 }
@@ -492,20 +489,17 @@ void simpletree_set_user(SimpleTree *st, const void *data, size_t size)
 {
     SimpleTreeMetaNode *meta = get_meta(st);
     meta->user_size = size;
-
-    if (size <= (SIMPLETREE_NODESIZE - sizeof(*meta))) {
+    if (size <= (SIMPLETREE_NODESIZE - (CRYPTO_IV_SIZE + sizeof(*meta)))) {
         memcpy((uint8_t *) meta + sizeof(*meta), data, size);
     } else {
         int take;
         int left;
         const uint8_t *in = data;
-        const int capacity = SIMPLETREE_NODESIZE - sizeof(SimpleTreeUserNode);
         for (left = size; left > 0; in += take, left -= take) {
-            take = left < capacity ? left : capacity;
             node_t n = create_user_node(st);
             SimpleTreeUserNode *un = &get_node(st, n)->u.un;
+            take = left < sizeof(un->data) ? left : sizeof(un->data);
             memcpy(un->data, in, take);
-            memset(un->data + take, 0, capacity - take);
             put_node(st, n);
         }
     }
