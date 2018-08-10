@@ -8,8 +8,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
-
 
 #include "block.h"
 #include "block-swap.h"
@@ -168,7 +169,7 @@ int main(int argc, char **argv)
     //int r;
 
     if (argc != 5) {
-        fprintf(stderr, "usage: %s <swap:dst.swap> <N> <ROUNDS> <align|unalign>\n",
+        fprintf(stderr, "usage: %s <dst.swap> <N> <ROUNDS> <align|unalign>\n",
                 argv[0]);
         exit(-1);
     }
@@ -181,6 +182,11 @@ int main(int argc, char **argv)
     int N = atoi(argv[2]);
     int R = atoi(argv[3]);
     int align = (!strcmp("align", argv[4]));
+
+    struct stat st;
+    if (stat(dst, &st) < 0) {
+        swap_create(dst, 100 << 20, 0);
+    }
 
     swap_open(&bs, dst, 0);
     pthread_t tid;
