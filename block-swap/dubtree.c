@@ -108,14 +108,15 @@ int dubtree_init(DubTree *t,
     void *m;
     asprintf(&mn, "%s/"DUBTREE_MMAPPED_NAME, fn);
     dubtree_handle_t f = dubtree_open_existing(mn);
-    if (invalid_handle(f) && errno == EEXIST) {
+    if (invalid_handle(f) && errno != EEXIST) {
         f = dubtree_open_new(mn, 0);
         if (invalid_handle(f)) {
             printf("unable to open %s: %s\n", mn, strerror(errno));
             return -1;
         }
         dubtree_set_file_size(f, sizeof(DubTreeHeader));
-    } else {
+    }
+    if (invalid_handle(f)) {
         printf("unable to open or create %s: %s\n", mn, strerror(errno));
         return -1;
     }

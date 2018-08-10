@@ -216,8 +216,24 @@ int main(int argc, char **argv)
         }
     }
 
+    printf("opening swapimage...\n");
     ioh_init();
     swap_aio_init();
+
+    int needs_format = 0;
+    if (!file_exists(fn)) {
+        r = swap_create(fn, 100 << 20, 0);
+        if (r < 0) {
+            printf("error creating %s\n", fn);
+            exit(1);
+        }
+        needs_format = 1;
+    }
+    r = swap_open(&bs, fn, 0);
+    if (r < 0) {
+        printf("error opening %s\n", fn);
+        exit(1);
+    }
 
     int sp[2];
     int sp2[2];
@@ -246,6 +262,7 @@ int main(int argc, char **argv)
         break;
     }
 
+    printf("connecting to NBD...\n");
     r = ioctl(device, NBD_SET_SIZE_BLOCKS, 1000 << 20);
     if (r) {
         err(1, "device ioctl (a) failed");
@@ -297,12 +314,6 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    int needs_format = 0;
-    if (!file_exists(fn)) {
-        swap_create(fn, 100 << 20, 0);
-        needs_format = 1;
-    }
-    swap_open(&bs, fn, 0);
     uuid_t uuid;
     swap_ioctl(&bs, 0, uuid);
     char uuid_str[37];
