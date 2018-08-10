@@ -66,17 +66,54 @@ static void shell(char *arg, ...) {
     }
 }
 
+static inline int safe_read(int fd, void *buf, size_t sz)
+{
+    uint8_t *b = buf;
+    size_t left = sz;
+    while (left) {
+        ssize_t r;
+        do {
+            r = read(fd, b, left);
+        } while (r < 0 && errno == EINTR);
+        if (r < 0) {
+            err(1, "pread failed");
+        }
+        left -= r;
+        b += r;
+    }
+    return sz;
+}
+
+static inline int safe_write(int fd, const void *buf, size_t sz)
+{
+    const uint8_t *b = buf;
+    size_t left = sz;
+    while (left) {
+        ssize_t r;
+        do {
+            r = write(fd, b, left);
+        } while (r < 0 && errno == EINTR);
+        if (r < 0) {
+            err(1, "pread failed");
+        }
+        left -= r;
+        b += r;
+    }
+    return sz;
+}
+
+
 static void nbd_read_done(void *opaque, int ret) {
     int r;
     struct read_info *ri = opaque;
     struct client_info *ci = ri->ci;
 
-    r = write(ci->sock, &ri->reply, sizeof(ri->reply));
+    r = safe_write(ci->sock, &ri->reply, sizeof(ri->reply));
     if (r != sizeof(ri->reply)) {
         err(1, "sock write (a) failed");
     }
 
-    r = write(ci->sock, ri->buffer, ri->len);
+    r = safe_write(ci->sock, ri->buffer, ri->len);
     if (r != ri->len) {
         err(1, "sock write (b) failed");
     }
@@ -99,7 +136,7 @@ static void got_data(void *opaque)
     struct nbd_reply reply = {};
     int r;
 
-    r = read(ci->sock, &request, sizeof(request));
+    r = safe_read(ci->sock, &request, sizeof(request));
     if (r == sizeof(request)) {
         memcpy(reply.handle, request.handle, sizeof(reply.handle));
         reply.magic = htonl(NBD_REPLY_MAGIC);
@@ -110,7 +147,7 @@ static void got_data(void *opaque)
             case NBD_CMD_FLUSH: {
                 printf("got flush\n");
                 swap_flush(ci->bs);
-                r = write(ci->sock, &reply, sizeof(reply));
+                r = safe_write(ci->sock, &reply, sizeof(reply));
                 if (r != sizeof(reply)) {
                     err(1, "sock write (c) failed");
                 }
@@ -136,7 +173,7 @@ static void got_data(void *opaque)
             }
             case NBD_CMD_WRITE: {
                 assert(!(len % 4096));
-                r = write(ci->sock, &reply, sizeof(reply));
+                r = safe_write(ci->sock, &reply, sizeof(reply));
                 uint8_t *buffer = malloc(len);
                 int len = ntohl(request.len);
                 uint64_t offset = be64toh(request.from);
@@ -144,7 +181,7 @@ static void got_data(void *opaque)
                 int left;
 
                 for (left = len, b = buffer; left > 0; b += r, left -= r)  {
-                    r = read(ci->sock, b, left);
+                    r = safe_read(ci->sock, b, left);
                     if (r < 0) {
                         err(1, "sock read failed");
                     }
@@ -157,7 +194,7 @@ static void got_data(void *opaque)
 
             default: {
                 printf("default %x\n", ntohl(request.type));
-                r = write(ci->sock, &reply, sizeof(reply));
+                r = safe_write(ci->sock, &reply, sizeof(reply));
                 if (r != sizeof(reply)) {
                     err(1, "sock write (d) failed");
                 }
@@ -290,10 +327,10 @@ int main(int argc, char **argv)
         if(ioctl(device, NBD_SET_SOCK, sp[1]) == -1){
             fprintf(stderr, "NBD_SET_SOCK failed %s\n", strerror(errno));
             ok = 0;
-            r = write(sp2[1], &ok, sizeof(ok));
+            r = safe_write(sp2[1], &ok, sizeof(ok));
         } else {
             ok = 1;
-            r = write(sp2[1], &ok, sizeof(ok));
+            r = safe_write(sp2[1], &ok, sizeof(ok));
             r = ioctl(device, NBD_DO_IT);
             fprintf(stderr, "nbd device terminated %d\n", r);
             if (r == -1)
@@ -304,7 +341,7 @@ int main(int argc, char **argv)
         exit(0);
     }
 
-    r = read(sp2[0], &ok, sizeof(ok));
+    r = safe_read(sp2[0], &ok, sizeof(ok));
     if (r != sizeof(ok)) {
         err(1, "socket pair read failed");
     }
