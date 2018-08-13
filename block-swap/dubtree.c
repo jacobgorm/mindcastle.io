@@ -424,7 +424,7 @@ typedef struct {
     uint32_t split;
     uint32_t offset;
     uint8_t *buffer;
-    critical_section blocked_lock;
+    critical_section lock;
     int num_blocked;
     int num_unblocked;
     struct {
@@ -441,7 +441,7 @@ static inline HttpGetState *hgs_ref(HttpGetState *hgs) {
 
 static inline void hgs_deref(HttpGetState *hgs) {
     if (--(hgs->refcount) == 0) {
-        critical_section_free(&hgs->blocked_lock);
+        critical_section_free(&hgs->lock);
         free(hgs->url);
         free(hgs);
     }
@@ -486,6 +486,7 @@ static int execute_reads(DubTree *t,
 
     HttpGetState *hgs = f->opaque;
     if (hgs && hgs->buffer) {
+        critical_section_enter(&hgs->lock);
         if (hgs->ch && reads_inside_buffer(hgs, first, n)) {
             // XXX this calls for two heaps
             for (i = 0, rd = first; i < n; ++i, ++rd) {
@@ -502,15 +503,14 @@ static int execute_reads(DubTree *t,
                 hgs->split = hgs->offset = first->src_offset;
             }
             increment_counter(cs);
-            critical_section_enter(&hgs->blocked_lock);
             int num_blocked = hgs->num_blocked++;
             assert(num_blocked < MAX_BLOCKED_READS); //XXX
             hgs->blocked_reads[num_blocked].cs = cs;
             hgs->blocked_reads[num_blocked].dst = dst;
             hgs->blocked_reads[num_blocked].first = first;
             hgs->blocked_reads[num_blocked].n = n;
-            critical_section_leave(&hgs->blocked_lock);
         }
+        critical_section_leave(&hgs->lock);
         return 0;
     }
 
@@ -1198,31 +1198,14 @@ static chunk_id_t content_id(const uint8_t *in, int size)
 
 static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
 {
+    int done = 0;
     HttpGetState *hgs = opaque;
     DubTree *t = hgs->t;
+
+    critical_section_enter(&hgs->lock);
+
     memcpy(hgs->buffer + hgs->offset, ptr, size * nmemb);
     hgs->offset += size * nmemb;
-
-    critical_section_enter(&hgs->blocked_lock);
-    int num_blocked = hgs->num_blocked;
-    for (int i = 0; i < num_blocked; ++i) {
-        Read *first = hgs->blocked_reads[i].first;
-        if (first) {
-            int n = hgs->blocked_reads[i].n;
-            assert(n >= 1);
-            if (reads_inside_buffer(hgs, first, n)) {
-                Read *rd = first;
-                for (int j = 0; j < n; ++j, ++rd) {
-                    memcpy(hgs->blocked_reads[i].dst + rd->dst_offset, hgs->buffer + rd->src_offset, rd->size);
-                }
-                hgs->blocked_reads[i].first = NULL;
-                decrement_counter(hgs->blocked_reads[i].cs);
-                free(first);
-                ++(hgs->num_unblocked);
-            }
-        }
-    }
-    critical_section_leave(&hgs->blocked_lock);
 
     if ((hgs->offset == hgs->size) || (hgs->offset == hgs->split)) {
         if (hgs->split > 0 && hgs->offset > hgs->split) {
@@ -1253,12 +1236,37 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
             } else {
                 fprintf(stderr, "chunk damaged in transit, not caching!!\n");
             }
-
-            hgs->buffer = NULL;
-            unmap_file(b, hgs->size);
-            hgs_deref(hgs);
+            hgs->ch = NULL;
+            done = 1;
         }
     }
+
+    int num_blocked = hgs->num_blocked;
+    for (int i = 0; i < num_blocked; ++i) {
+        Read *first = hgs->blocked_reads[i].first;
+        if (first) {
+            int n = hgs->blocked_reads[i].n;
+            assert(n >= 1);
+            if (done || reads_inside_buffer(hgs, first, n)) {
+                Read *rd = first;
+                for (int j = 0; j < n; ++j, ++rd) {
+                    memcpy(hgs->blocked_reads[i].dst + rd->dst_offset, hgs->buffer + rd->src_offset, rd->size);
+                }
+                hgs->blocked_reads[i].first = NULL;
+                decrement_counter(hgs->blocked_reads[i].cs);
+                free(first);
+                ++(hgs->num_unblocked);
+            }
+        }
+    }
+
+    if (done) {
+        hgs->buffer = NULL;
+        unmap_file(hgs->buffer, hgs->size);
+        hgs_deref(hgs);
+    }
+
+    critical_section_leave(&hgs->lock);
     return size * nmemb;
 }
 
@@ -1275,7 +1283,7 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
         err(1, "unable to create tmp file\n");
     }
     HttpGetState *hgs = calloc(1, sizeof(*hgs));
-    critical_section_init(&hgs->blocked_lock);
+    critical_section_init(&hgs->lock);
     fprintf(stderr, "%p fetching %s s=%d...\n", hgs, url, synchronous);
     hgs->t0 = rtc();
     hgs->chunk_id = chunk_id;
