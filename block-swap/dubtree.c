@@ -456,7 +456,7 @@ static inline int reads_inside_buffer(const HttpGetState *hgs, const Read *first
     } else if (hgs->offset < hgs->split) { // left side fetch
         return end <= hgs->offset || begin >= hgs->split;
     } else {
-        return 1;
+        return 0;
     }
 }
 
