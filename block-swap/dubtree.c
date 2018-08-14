@@ -1202,7 +1202,7 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
             char ranges[32];
             sprintf(ranges, "0-%u", hgs->split - 1);
             if (hgs->ch) {
-                hgs_deref(hgs->ch);
+                hgs_deref(hgs); /* because curl handle holds a pointer to hgs. */
             }
             hgs->ch = curl_easy_init();
             prep_curl_handle(hgs->ch, hgs, ranges);
