@@ -2022,6 +2022,7 @@ void dubtree_close(DubTree *t)
     }
     free(t->cache_infos);
     lru_cache_close(&t->lru);
+    cbf_close(&t->cbf);
 
     free(t->buffered);
 
@@ -2029,6 +2030,7 @@ void dubtree_close(DubTree *t)
     while (*fb) {
         free(*fb++);
     }
+    free(t->cache);
 
 #ifdef _WIN32
     if (!FlushViewOfFile(t->header, 0)) {

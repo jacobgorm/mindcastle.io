@@ -1699,6 +1699,12 @@ void swap_close(BlockDriverState *bs)
     lru_cache_close(&s->bc);
     hashtable_clear(&s->cached_blocks);
     hashtable_clear(&s->open_files);
+    free(s->filename);
+    for (int i = 0; i < s->num_fallbacks; ++i) {
+        free(s->fallbacks[i]);
+    }
+    free(s->cache);
+    free(s);
 }
 
 int swap_create(const char *filename, int64_t size, int flags)

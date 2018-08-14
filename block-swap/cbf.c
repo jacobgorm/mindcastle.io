@@ -13,6 +13,11 @@ void cbf_init(CBF *cbf)
     cbf_double(cbf);
 }
 
+void cbf_close(CBF *cbf)
+{
+    free(cbf->counters);
+}
+
 void cbf_double(CBF *cbf) {
 
     cbf->n = cbf->n ? 2 * cbf->n : 1;
