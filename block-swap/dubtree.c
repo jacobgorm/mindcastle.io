@@ -101,7 +101,7 @@ int dubtree_init(DubTree *t,
     dubtree_mkdir(fn);
 
     if (!t->cache) {
-        t->cache = fn;
+        t->cache = strdup(fn);
     }
 
     char *mn;
@@ -360,9 +360,9 @@ static void decrypt_read(void *opaque, int result)
                 ds->sizes[i] = dsize;
             }
         }
-        free(ds->hashes);
     }
     ds->cb(ds->opaque, result);
+    free(ds->hashes);
     free(ds);
 }
 
