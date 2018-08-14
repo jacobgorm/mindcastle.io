@@ -57,6 +57,7 @@ int swap_aio_add_curl_handle(CURL *ch) {
 }
 
 extern void dump_swapstat(void);
+void dubtree_cleanup_curl_handle(CURL *ch);
 
 int swap_aio_wait(void)
 {
@@ -87,6 +88,7 @@ int swap_aio_wait(void)
                 printf("got response %u\n", response);
             }
             curl_multi_remove_handle(cmh, msg->easy_handle);
+            dubtree_cleanup_curl_handle(msg->easy_handle);
             curl_easy_cleanup(msg->easy_handle);
         }
     } while (num_msgs);

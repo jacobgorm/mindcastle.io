@@ -413,9 +413,8 @@ typedef struct {
     double t0;
     DubTree *t;
     char *url;
-    CURL *ch;
+    int active;
     int synchronous;
-    int paused;
     int size;
     int fd;
     uint32_t split;
@@ -460,16 +459,25 @@ static inline int reads_inside_buffer(const HttpGetState *hgs, const Read *first
 int curl_sockopt_cb(void *clientp, curl_socket_t curlfd, curlsocktype purpose);
 static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque);
 
-static void prep_curl_handle(CURL *ch, HttpGetState *hgs, const char *ranges)
+static void prep_curl_handle(CURL *ch, const char *url, const char *ranges,
+        void *opaque)
 {
-    curl_easy_setopt(ch, CURLOPT_URL, hgs->url);
+    curl_easy_setopt(ch, CURLOPT_URL, url);
     curl_easy_setopt(ch, CURLOPT_BUFFERSIZE, CURL_MAX_READ_SIZE);
-    curl_easy_setopt(ch, CURLOPT_WRITEDATA, hgs_ref(hgs));
+    curl_easy_setopt(ch, CURLOPT_WRITEDATA, opaque);
+    curl_easy_setopt(ch, CURLOPT_PRIVATE, opaque);
     curl_easy_setopt(ch, CURLOPT_SOCKOPTFUNCTION, curl_sockopt_cb);
     curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, curl_data_cb);
     if (ranges) {
-        curl_easy_setopt(hgs->ch, CURLOPT_RANGE, ranges);
+        curl_easy_setopt(ch, CURLOPT_RANGE, ranges);
     }
+}
+
+void dubtree_cleanup_curl_handle(CURL *ch)
+{
+    HttpGetState *hgs;
+    curl_easy_getinfo(ch, CURLINFO_PRIVATE, &hgs);
+    hgs_deref(hgs);
 }
 
 static int execute_reads(DubTree *t,
@@ -482,33 +490,40 @@ static int execute_reads(DubTree *t,
     Read *rd;
 
     HttpGetState *hgs = f->opaque;
-    if (hgs && hgs->buffer) {
+    if (hgs) {
+        int resolved = 0;
         critical_section_enter(&hgs->lock);
-        if (hgs->ch && reads_inside_buffer(hgs, first, n)) {
-            // XXX this calls for two heaps
-            for (i = 0, rd = first; i < n; ++i, ++rd) {
-                memcpy(dst + rd->dst_offset, hgs->buffer + rd->src_offset, rd->size);
+        if (hgs->buffer) {
+            if (hgs->active && reads_inside_buffer(hgs, first, n)) {
+                for (i = 0, rd = first; i < n; ++i, ++rd) {
+                    memcpy(dst + rd->dst_offset, hgs->buffer + rd->src_offset,
+                            rd->size);
+                }
+                free(first);
+            } else {
+                if (!hgs->active) {
+                    CURL *ch = curl_easy_init();
+                    char ranges[32];
+                    sprintf(ranges, "%u-%u", first->src_offset, hgs->chunk_id.size - 1);
+                    prep_curl_handle(ch, hgs->url, ranges, hgs_ref(hgs));
+                    swap_aio_add_curl_handle(ch);
+                    hgs->split = hgs->offset = first->src_offset;
+                    hgs->active = 1;
+                }
+                increment_counter(cs);
+                int num_blocked = hgs->num_blocked++;
+                assert(num_blocked < MAX_BLOCKED_READS); //XXX
+                hgs->blocked_reads[num_blocked].cs = cs;
+                hgs->blocked_reads[num_blocked].dst = dst;
+                hgs->blocked_reads[num_blocked].first = first;
+                hgs->blocked_reads[num_blocked].n = n;
             }
-            free(first);
-        } else {
-            if (!hgs->ch) {
-                hgs->ch = curl_easy_init();
-                char ranges[32];
-                sprintf(ranges, "%u-%u", first->src_offset, hgs->chunk_id.size - 1);
-                prep_curl_handle(hgs->ch, hgs, ranges);
-                swap_aio_add_curl_handle(hgs->ch);
-                hgs->split = hgs->offset = first->src_offset;
-            }
-            increment_counter(cs);
-            int num_blocked = hgs->num_blocked++;
-            assert(num_blocked < MAX_BLOCKED_READS); //XXX
-            hgs->blocked_reads[num_blocked].cs = cs;
-            hgs->blocked_reads[num_blocked].dst = dst;
-            hgs->blocked_reads[num_blocked].first = first;
-            hgs->blocked_reads[num_blocked].n = n;
+            resolved = 1;
         }
         critical_section_leave(&hgs->lock);
-        return 0;
+        if (resolved) {
+            return 0;
+        }
     }
 
 #ifdef _WIN32
@@ -1189,8 +1204,6 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
 {
     int done = 0;
     HttpGetState *hgs = opaque;
-    DubTree *t = hgs->t;
-
     critical_section_enter(&hgs->lock);
 
     memcpy(hgs->buffer + hgs->offset, ptr, size * nmemb);
@@ -1198,15 +1211,12 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
 
     if ((hgs->offset == hgs->size) || (hgs->offset == hgs->split)) {
         if (hgs->split > 0 && hgs->offset > hgs->split) {
+            CURL *ch = curl_easy_init();
             hgs->offset = 0;
             char ranges[32];
             sprintf(ranges, "0-%u", hgs->split - 1);
-            if (hgs->ch) {
-                hgs_deref(hgs); /* because curl handle holds a pointer to hgs. */
-            }
-            hgs->ch = curl_easy_init();
-            prep_curl_handle(hgs->ch, hgs, ranges);
-            swap_aio_add_curl_handle(hgs->ch);
+            prep_curl_handle(ch, hgs->url, ranges, hgs_ref(hgs));
+            swap_aio_add_curl_handle(ch);
         } else {
             fprintf(stderr, "%s %.2fMiB/s\n", hgs->url, (double) (hgs->size) / (1024.0 * 1024.0 * (rtc() - hgs->t0)));
             void *b = hgs->buffer;
@@ -1215,6 +1225,7 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
             chunk_id_t real_id = content_id(b, hgs->chunk_id.size);
 
             if (equal_chunk_ids(&real_id, &hgs->chunk_id)) {
+                DubTree *t = hgs->t;
                 char *fn = name_chunk(t->cache, hgs->chunk_id);
                 int r = linkat(AT_FDCWD, procfn, AT_FDCWD, fn, AT_SYMLINK_FOLLOW);
                 close(hgs->fd);
@@ -1225,7 +1236,7 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
             } else {
                 fprintf(stderr, "chunk damaged in transit, not caching!!\n");
             }
-            hgs->ch = NULL;
+            hgs->active = 0;
             done = 1;
         }
     }
@@ -1252,10 +1263,11 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
     if (done) {
         hgs->buffer = NULL;
         unmap_file(hgs->buffer, hgs->size);
-        hgs_deref(hgs);
+        critical_section_leave(&hgs->lock);
+    } else {
+        critical_section_leave(&hgs->lock);
     }
 
-    critical_section_leave(&hgs->lock);
     return size * nmemb;
 }
 
@@ -1273,7 +1285,7 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
     }
     HttpGetState *hgs = calloc(1, sizeof(*hgs));
     critical_section_init(&hgs->lock);
-    fprintf(stderr, "%p fetching %s s=%d...\n", hgs, url, synchronous);
+    fprintf(stderr, "fetching %s s=%d...\n", url, synchronous);
     hgs->t0 = rtc();
     hgs->chunk_id = chunk_id;
     hgs->size = chunk_id.size;
@@ -1286,9 +1298,8 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
     f->opaque = hgs_ref(hgs);
 
     if (synchronous) {
-        hgs->ch = shared_ch;
-        prep_curl_handle(hgs->ch, hgs, NULL);
-        CURLcode r = curl_easy_perform(hgs->ch);
+        prep_curl_handle(shared_ch, hgs->url, NULL, hgs_ref(hgs));
+        CURLcode r = curl_easy_perform(shared_ch);
         if (r != CURLE_OK) {
             errx(1, "unable to fetch %s, %s!", url, curl_easy_strerror(r));
         }
