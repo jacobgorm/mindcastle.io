@@ -45,17 +45,7 @@ static inline int file_exists(const char *path)
 static inline void
 critical_section_init(critical_section *cs)
 {
-    static pthread_mutexattr_t mta_recursive;
-    static int initialized = 0;
-    int ret;
-
-    if (!initialized) {
-        assert(!pthread_mutexattr_init(&mta_recursive));
-        assert(!pthread_mutexattr_settype(&mta_recursive,
-                    PTHREAD_MUTEX_RECURSIVE));
-    }
-
-    ret = pthread_mutex_init(cs, &mta_recursive);
+    int ret = pthread_mutex_init(cs, NULL);
     if (ret) {
         errno = ret;
         err(1, "%s: pthread_mutex_init failed", __FUNCTION__);
@@ -70,7 +60,7 @@ critical_section_free(critical_section *cs)
     ret = pthread_mutex_destroy(cs);
     if (ret) {
         errno = ret;
-        err(1, "%s: pthread_mutex_destroy failed", __FUNCTION__);
+        warn("%s: pthread_mutex_destroy failed", __FUNCTION__);
     }
 }
 
@@ -87,16 +77,17 @@ critical_section_enter(critical_section *cs)
 }
 
 static inline void
-critical_section_leave(critical_section *cs)
+critical_section_leave(critical_section *cs, const char *fn, int l)
 {
     int ret;
 
     ret = pthread_mutex_unlock(cs);
     if (ret) {
         errno = ret;
-        err(1, "%s: pthread_mutex_unlock failed", __FUNCTION__);
+        err(1, "%s: pthread_mutex_unlock failed @ %s:%d", __FUNCTION__, fn, l);
     }
 }
+#define critical_section_leave(__a) critical_section_leave((__a), __FUNCTION__, __LINE__)
 
 #include <sys/time.h>
 static inline uint64_t os_get_clock(void)
