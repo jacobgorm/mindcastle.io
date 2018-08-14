@@ -40,7 +40,7 @@
 #define CURL_MAX_READ_SIZE (1<<19)
 #endif
 
-static int populate_cbf(DubTree *t, Crypto *crypto, int n);
+static int populate_cbf(DubTree *t, Crypto *crypto);
 static dubtree_handle_t prepare_http_get(DubTree *t,
         int synchronous, const char *url, chunk_id_t chunk_id);
 
@@ -206,10 +206,7 @@ int dubtree_init(DubTree *t,
         (t->header->dubtree_slot_size == DUBTREE_SLOT_SIZE) &&
         (t->header->dubtree_max_levels == DUBTREE_MAX_LEVELS)) {
 
-        Crypto crypto;
-        crypto_init(&crypto, t->header->key);
-        populate_cbf(t, &crypto, 0);
-        crypto_close(&crypto);
+        cbf_init(&t->cbf);
         return 0;
     } else {
         printf("mismatched dubtree header!\n");
@@ -771,39 +768,31 @@ static inline size_t ud_size(const UserData *cud, size_t n)
     return sizeof(*cud) + sizeof(cud->chunk_ids[0]) * n;
 }
 
-static int populate_cbf(DubTree *t, Crypto *crypto, int n)
+static int populate_cbf(DubTree *t, Crypto *crypto)
 {
-    SimpleTree trees[DUBTREE_MAX_LEVELS] = {};
-    int added = 0;
-
-    for (int i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
-        if (valid_chunk_id(&t->levels[i])) {
-            const UserData *cud;
-            simpletree_open(&trees[i], crypto, get_chunk_fd(t, t->levels[i]),
-                    t->hashes[i]);
-            cud = simpletree_get_user(&trees[i]);
-            n += cud->num_chunks;
+    int retry = 1;
+    do {
+        if (retry) {
+            cbf_double(&t->cbf);
         }
-    }
-
-    if (n < 0x1000) {
-        n = 0x1000;
-    }
-    cbf_clear(&t->cbf);
-    cbf_init(&t->cbf, 2 * n);
-
-    for (int i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
-        if (valid_chunk_id(&t->levels[i])) {
-            SimpleTree *st = &trees[i];
-            const UserData *cud = simpletree_get_user(st);
-            for (int j = 0; j < cud->num_chunks; ++j) {
-                chunk_id_t chunk_id = get_chunk_id(cud, j);
-                cbf_add(&t->cbf, chunk_id.id.bytes);
-                ++added;
+        retry = 0;
+        for (int i = 0; i < DUBTREE_MAX_LEVELS && !retry; ++i) {
+            if (valid_chunk_id(&t->levels[i])) {
+                SimpleTree st;
+                simpletree_open(&st, crypto, get_chunk_fd(t, t->levels[i]),
+                        t->hashes[i]);
+                const UserData *cud = simpletree_get_user(&st);
+                for (int j = 0; j < cud->num_chunks; ++j) {
+                    chunk_id_t chunk_id = get_chunk_id(cud, j);
+                    if (cbf_add(&t->cbf, chunk_id.id.bytes)) {
+                        retry = 1;
+                        break;
+                    }
+                }
+                simpletree_close(&st);
             }
-            simpletree_close(st);
         }
-    }
+    } while (retry);
 
     return 0;
 }
@@ -1721,11 +1710,9 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     chunk_id_t out_id = {};
     int out_chunk = -1;
     struct buf_elem *e;
-    int prev_n_chunks = 0;
     int *deref = NULL;
     
     if (old_ud) {
-        prev_n_chunks = old_ud->num_chunks;
         deref = calloc(old_ud->num_chunks, sizeof(int));
         for (int i = 0; i < old_ud->num_chunks; ++i) {
             deref[i] = -1;
@@ -1887,15 +1874,17 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         sift_down(t, heap, j);
     }
 
-    if (ud->num_chunks - prev_n_chunks + t->cbf.n > t->cbf.max) {
-        printf("rebuild %d %d %d %d\n", ud->num_chunks, prev_n_chunks, t->cbf.n, t->cbf.max);
-        populate_cbf(t, &crypto, ud->num_chunks - prev_n_chunks);
-    }
-
-    for (int i = 0; i < ud->num_chunks; ++i) {
-        chunk_id_t chunk_id = get_chunk_id(ud, i);
-        cbf_add(&t->cbf, chunk_id.id.bytes);
-    }
+    int retry = 0;
+    do {
+        retry = 0;
+        for (int i = 0; i < ud->num_chunks && !retry; ++i) {
+            chunk_id_t chunk_id = get_chunk_id(ud, i);
+            retry = cbf_add(&t->cbf, chunk_id.id.bytes);
+        }
+        if (retry) {
+            populate_cbf(t, &crypto);
+        }
+    } while (retry);
 
     /* Finish the combined tree and commit the merge by
      * installing a globally visible reference to the merged

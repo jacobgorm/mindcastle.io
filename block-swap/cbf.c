@@ -6,27 +6,29 @@
 
 #include "cbf.h"
 
-void cbf_init(CBF *cbf, int n)
+void cbf_init(CBF *cbf)
 {
+    cbf->counters = NULL;
+    cbf->n = 0;
+    cbf_double(cbf);
+}
+
+void cbf_double(CBF *cbf) {
+
+    cbf->n = cbf->n ? 2 * cbf->n : 1;
     double p = .001f;
-    double m = - ((double) n * log(p)) / (pow(log(2), 2));
+    double m = - ((double) cbf->n * log(p)) / (pow(log(2), 2));
     double k = - (log(p) / log(2));
 
     int bits;
     for (bits = 0; (1 << bits) < m; ++bits);
-    //printf("m=%f, k=%f, M=%d bits=%d\n", m, k, 1 << bits, bits);
-    //assert(k * bits <= 128);
 
-    cbf->counters = calloc(1, 1 << bits);
     cbf->bits = bits;
     cbf->k = ceil(k);
-    cbf->max = n;
-}
 
-void cbf_clear(CBF *cbf)
-{
+    printf("now %d k=%d %d bits\n", cbf->n, cbf->k, cbf->bits);
     free(cbf->counters);
-    memset(cbf, 0, sizeof(*cbf));
+    cbf->counters = calloc(1, 1 << cbf->bits);
 }
 
 static inline int cbf_modify(CBF *cbf, const uint8_t *key, const int direction)
@@ -58,19 +60,12 @@ static inline int cbf_modify(CBF *cbf, const uint8_t *key, const int direction)
             over_or_underflow = c == 1 ? 1 : over_or_underflow;
         }
     }
-    cbf->n += direction;
     return over_or_underflow;
 }
 
 int cbf_add(CBF *cbf, const uint8_t *key)
 {
-    int overflow = cbf_modify(cbf, key, 1);
-    if (overflow || cbf->n > cbf->max) {
-        printf("OVERFLOWING!\n");
-        assert(0);
-        return 1;
-    }
-    return 0;
+    return cbf->n == 0 || cbf_modify(cbf, key, 1);
 }
 
 int cbf_remove(CBF *cbf, const uint8_t *key)
