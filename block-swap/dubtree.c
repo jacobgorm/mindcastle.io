@@ -419,8 +419,8 @@ typedef struct {
     int fd;
     uint32_t split;
     uint32_t offset;
+    critical_section lock; /* protects members below */
     uint8_t *buffer;
-    critical_section lock;
     int num_blocked;
     int num_unblocked;
     struct {
@@ -1204,7 +1204,6 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
 {
     int done = 0;
     HttpGetState *hgs = opaque;
-    critical_section_enter(&hgs->lock);
 
     memcpy(hgs->buffer + hgs->offset, ptr, size * nmemb);
     hgs->offset += size * nmemb;
@@ -1241,7 +1240,10 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
         }
     }
 
+    critical_section_enter(&hgs->lock);
     int num_blocked = hgs->num_blocked;
+    critical_section_leave(&hgs->lock);
+
     for (int i = 0; i < num_blocked; ++i) {
         Read *first = hgs->blocked_reads[i].first;
         if (first) {
@@ -1261,10 +1263,9 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
     }
 
     if (done) {
+        critical_section_enter(&hgs->lock);
         hgs->buffer = NULL;
         unmap_file(hgs->buffer, hgs->size);
-        critical_section_leave(&hgs->lock);
-    } else {
         critical_section_leave(&hgs->lock);
     }
 
