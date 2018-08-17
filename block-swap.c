@@ -43,6 +43,8 @@
 #include <sys/types.h>
 #include <fcntl.h>
 
+#include <openssl/rand.h>
+
 #include "aio.h"
 #include "ioh.h"
 //#include "block-int.h"
@@ -67,6 +69,7 @@
 #include "block-swap/crypto.h"
 #include "block-swap/hashtable.h"
 #include "block-swap/lrucache.h"
+#include "block-swap/hex.h"
 
 #include <lz4.h>
 
@@ -229,12 +232,13 @@ typedef struct BDRVSwapState {
     int num_fallbacks;
     char *fallbacks[DUBTREE_MAX_FALLBACKS + 1];
     char *cache;
+    uint8_t crypto_key[CRYPTO_KEY_SIZE];
     /* Where the CoW kernel module places files. */
     char *cow_backup;
     uuid_t uuid;
+    chunk_id_t top_id;
     uint64_t size;
 
-    HashTable open_files;
     HashTable cached_blocks;
     HashTable busy_blocks;
     LruCache bc;
@@ -749,7 +753,7 @@ static int swap_read_header(BDRVSwapState *s)
     }
     len = st.st_size;
 
-    buff = malloc(len ? len + 1 : 0);
+    buff = calloc(1, len);
     if (!buff) {
         warn("swap: no memory or file empty");
         fclose(file);
@@ -767,6 +771,7 @@ static int swap_read_header(BDRVSwapState *s)
     buff[len] = '\0';
 
     next = buff;
+
     while ((line = strsep(&next, "\r\n"))) {
         if (!strncmp(line, "size=", 5)) {
             s->size = strtoll(line + 5, NULL, 0);
@@ -781,11 +786,53 @@ static int swap_read_header(BDRVSwapState *s)
             s->fallbacks[s->num_fallbacks++] = strdup(line + 9);
         } else if (!strncmp(line, "cache=", 6)) {
             s->cache = strdup(line + 6);
+        } else if (!strncmp(line, "snapshot=", 9)) {
+            unhex(s->top_id.id.bytes, line + 9, sizeof(s->top_id.id.bytes));
+        } else if (!strncmp(line, "key=", 4)) {
+            unhex(s->crypto_key, line + 4, CRYPTO_IV_SIZE);
         }
     }
-
+    /* repair strsep damage */
+    for (int i = 0; i < len; ++i) {
+        if (buff[i] == '\0') {
+            buff[i] = '\n';
+        }
+    }
     free(buff);
+    return 0;
+}
 
+static int swap_write_header(BDRVSwapState *s)
+{
+    FILE *f = fopen(s->filename, "w");
+    if (!f) {
+        warn("swap: unable to open %s", s->filename);
+        return -1;
+    }
+
+    char uuid_str[37];
+    uuid_unparse_lower(s->uuid, uuid_str);
+    fprintf(f, "uuid=%s\n", uuid_str);
+    fprintf(f, "size=%lu\n", s->size);
+
+    if (s->swapdata) {
+        fprintf(f, "swapdata=%s\n", s->swapdata);
+    }
+    if (s->cache) {
+        fprintf(f, "cache=%s\n", s->cache);
+    }
+    for (int i = 1; i < s->num_fallbacks; ++i) {
+        fprintf(f, "fallback=%s\n", s->fallbacks[i]);
+    }
+    char tmp[128 + 1];
+
+    hex(tmp, s->crypto_key, CRYPTO_KEY_SIZE);
+    fprintf(f, "key=%s\n", tmp);
+
+    hex(tmp, s->top_id.id.bytes, sizeof(s->top_id.id.bytes)); // XXX constant
+    fprintf(f, "snapshot=%s\n", tmp);
+
+    fclose(f);
     return 0;
 }
 
@@ -851,6 +898,11 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
         goto out;
     }
 
+    uint8_t zero_key[CRYPTO_IV_SIZE] = {};
+    if (!memcmp(zero_key, s->crypto_key, CRYPTO_IV_SIZE)) {
+        RAND_bytes(s->crypto_key, sizeof(s->crypto_key));
+    }
+
     /* Chop off filename to reveal dir. */
     path = strdup(s->filename);
     if (!path) {
@@ -899,7 +951,7 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
         }
     }
 
-    if (dubtree_init(&s->t, s->fallbacks, s->cache,
+    if (dubtree_init(&s->t, s->crypto_key, s->top_id, s->fallbacks, s->cache,
                 swap_malloc, swap_free, s) != 0) {
         warn("swap: failed to init dubtree");
         r = -1;
@@ -1602,7 +1654,7 @@ int swap_flush(BlockDriverState *bs)
     //aio_wait_end();
 #endif
 
-    //debug_printf("swap: emptying cache lines\n");
+    debug_printf("swap: emptying cache lines\n");
     swap_lock(s);
     for (i = 0; i < (1 << bc->log_lines); ++i) {
         LruCacheLine *cl = &bc->lines[i];
@@ -1620,7 +1672,7 @@ int swap_flush(BlockDriverState *bs)
     s->flush = 1;
     swap_unlock(s);
 
-    //debug_printf("swap: wait for all writes to complete\n");
+    debug_printf("swap: wait for all writes to complete\n");
     for (;;) {
         uint32_t load;
         swap_lock(s);
@@ -1632,7 +1684,7 @@ int swap_flush(BlockDriverState *bs)
         swap_signal_write(s);
         swap_wait_all_flushed(s);
     }
-    //debug_printf("swap: finished waiting for write threads\n");
+    debug_printf("swap: finished waiting for write threads\n");
 
     assert(s->pqs[0].n_heap == 0);
     assert(s->pqs[1].n_heap == 0);
@@ -1653,12 +1705,13 @@ int swap_flush(BlockDriverState *bs)
 
     /* Quiesce dubtree and release caches. */
     swap_lock(s);
-    hashtable_clear(&s->open_files);
     if (s->find_context) {
         dubtree_end_find(&s->t, s->find_context);
         s->find_context = NULL;
     }
     s->flush = 0;
+    s->top_id = dubtree_checkpoint(&s->t);
+    swap_write_header(s);
     swap_unlock(s);
     return 0;
 }
@@ -1698,7 +1751,6 @@ void swap_close(BlockDriverState *bs)
 
     lru_cache_close(&s->bc);
     hashtable_clear(&s->cached_blocks);
-    hashtable_clear(&s->open_files);
     free(s->filename);
     for (int i = 0; i < s->num_fallbacks; ++i) {
         free(s->fallbacks[i]);
@@ -1728,7 +1780,6 @@ int swap_create(const char *filename, int64_t size, int flags)
     uuid_generate_random(uuid);
     uuid_unparse_lower(uuid, uuid_str);
 
-#undef fprintf
     ret = fprintf(file, "uuid=%s\n", uuid_str);
     if (ret < 0) {
         warn("%s: fprintf failed", __FUNCTION__);

@@ -14,9 +14,9 @@
 /* These must go last or they will mess with e.g. asprintf() */
 #include <curl/curl.h>
 #include <curl/easy.h>
-#include <openssl/rand.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 
 #define DUBTREE_FILE_MAGIC_MMAP 0x73776170
 
@@ -44,12 +44,20 @@ static int populate_cbf(DubTree *t, Crypto *crypto);
 static dubtree_handle_t prepare_http_get(DubTree *t,
         int synchronous, const char *url, chunk_id_t chunk_id);
 
+static void __put_chunk(DubTree *t, int line);
+static void put_chunk(DubTree *t, int line);
+static dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id,
+                                       int dirty, int local, int *l);
+static dubtree_handle_t get_chunk(DubTree *t, chunk_id_t chunk_id,
+                                     int dirty, int local, int *l);
+static chunk_id_t content_id(const uint8_t *in, int size);
+
 typedef struct CacheLineUserData {
     dubtree_handle_t f;
     chunk_id_t chunk_id;
 } CacheLineUserData;
 
-int dubtree_init(DubTree *t,
+int dubtree_init(DubTree *t, const uint8_t *key, chunk_id_t top_id,
         char **fallbacks, char *cache,
         malloc_callback malloc_cb, free_callback free_cb,
         void *opaque)
@@ -64,6 +72,7 @@ int dubtree_init(DubTree *t,
     }
 
     memset(t, 0, sizeof(DubTree));
+    t->crypto_key = key;
     t->malloc_cb = malloc_cb;
     t->free_cb = free_cb;
     t->opaque = opaque;
@@ -104,97 +113,30 @@ int dubtree_init(DubTree *t,
         t->cache = strdup(fn);
     }
 
-    char *mn;
-    void *m;
-    asprintf(&mn, "%s/"DUBTREE_MMAPPED_NAME, fn);
-    dubtree_handle_t f = dubtree_open_existing(mn);
-    if (invalid_handle(f) && errno != EEXIST) {
-        f = dubtree_open_new(mn, 0);
-        if (invalid_handle(f)) {
-            printf("unable to open %s: %s\n", mn, strerror(errno));
-            return -1;
-        }
-        dubtree_set_file_size(f, sizeof(DubTreeHeader));
-    }
-    if (invalid_handle(f)) {
-        printf("unable to open or create %s: %s\n", mn, strerror(errno));
-        return -1;
-    }
 
-#ifdef _WIN32
-    HANDLE h = CreateFileMappingA(f, NULL, PAGE_READWRITE, 0,
-                                  sizeof(DubTreeHeader), NULL);
-    if (!h) {
-        Werr(1, "CreateFileMappingA fails");
-    }
-    m = MapViewOfFile(h, FILE_MAP_WRITE, 0, 0, sizeof(DubTreeHeader));
-    CloseHandle(h);
-    CloseHandle(f);
-    if (!m) {
-        Wwarn("unable to map %s", mn);
-        return -1;
-    }
-#else
-    m = mmap(NULL, sizeof(DubTreeHeader), PROT_READ | PROT_WRITE,
-                          MAP_SHARED, f->fd, 0);
-    dubtree_close_file(f);
-    if (m == MAP_FAILED) {
-        warn("unable to map name=%s\n", mn);
-        return -1;
-    }
-#endif
-
-    header = m;
+    header = calloc(1, sizeof(DubTreeHeader));
     t->header = header;
     t->levels = header->levels;
     t->hashes = header->hashes;
 
-    if (!t->header->magic) {
-
-        char **fb = t->fallbacks + 1;
-        f = DUBTREE_INVALID_HANDLE;
-        while (invalid_handle(f) && *fb) {
-            asprintf(&fn, "%s/%s", *fb++, DUBTREE_MMAPPED_NAME);
-            assert(fn);
-            printf("attempt to open fallback %s\n", fn);
-            if (!memcmp("http://", fn, 7) || !memcmp("https://", fn, 8)) {
-                printf("fetch %s\n", fn);
-                assert(0);
-#if 0
-                chunk_id_t dummy;
-                dummy.size =  sizeof(*(t->header));
-                f = prepare_http_get(t, 1, fn, dummy);
-#endif
-            } else {
-                printf("open RO %s\n", fn);
-                f = dubtree_open_existing_readonly(fn);
-            }
-            free(fn);
-            fn = NULL;
-        }
-
+    if (valid_chunk_id(&top_id)) {
+        int l;
+        dubtree_handle_t f = get_chunk(t, top_id, 0, 1, &l);
         if (valid_handle(f)) {
-            printf("reading from %s %d:%p\n", fn, f->fd, f->opaque);
+            printf("got top chunk!\n");
             dubtree_pread(f, t->header, sizeof(*(t->header)), 0);
-            dubtree_close_file(f);
+            put_chunk(t, l);
         }
     }
 
     if (!t->header->magic) {
-
         fprintf(stderr, "*** creating empty dubtree ****\n");
-
-        for (i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
-            clear_chunk_id(&t->levels[i]);
-        }
-
         /* Magic header and version number. */
         t->header->magic = DUBTREE_FILE_MAGIC_MMAP;
         t->header->version = DUBTREE_FILE_VERSION;
         t->header->dubtree_m = DUBTREE_M;
         t->header->dubtree_slot_size = DUBTREE_SLOT_SIZE;
         t->header->dubtree_max_levels = DUBTREE_MAX_LEVELS;
-        RAND_bytes(t->header->key, sizeof(t->header->key));
 
         __sync_synchronize();
     }
@@ -206,6 +148,7 @@ int dubtree_init(DubTree *t,
         (t->header->dubtree_slot_size == DUBTREE_SLOT_SIZE) &&
         (t->header->dubtree_max_levels == DUBTREE_MAX_LEVELS)) {
 
+        t->header->version = DUBTREE_FILE_VERSION;
         cbf_init(&t->cbf);
         return 0;
     } else {
@@ -215,17 +158,17 @@ int dubtree_init(DubTree *t,
     }
 }
 
-void
-dubtree_quiesce(DubTree *t)
+chunk_id_t dubtree_checkpoint(DubTree *t)
 {
+    chunk_id_t top_id = content_id((const uint8_t *) t->header, sizeof(DubTreeHeader));
+    int l;
+    dubtree_handle_t f = get_chunk(t, top_id, 1, 1, &l);
+    if (valid_handle(f)) {
+        dubtree_pwrite(f, t->header, sizeof(*(t->header)), 0);
+        put_chunk(t, l);
+    }
+    return top_id;
 }
-
-static void __put_chunk(DubTree *t, int line);
-static void put_chunk(DubTree *t, int line);
-static dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id,
-                                       int dirty, int local, int *l);
-static dubtree_handle_t get_chunk(DubTree *t, chunk_id_t chunk_id,
-                                     int dirty, int local, int *l);
 
 typedef struct Read {
     int src_offset;
@@ -832,7 +775,7 @@ void *dubtree_prepare_find(DubTree *t)
 #ifdef _WIN32
     fx->event = CreateEvent(NULL, FALSE, FALSE, NULL);
 #endif
-    crypto_init(&fx->crypto, t->header->key);
+    crypto_init(&fx->crypto, t->crypto_key);
     return fx;
 }
 
@@ -1351,6 +1294,7 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
                 if (!memcmp("http://", fn, 7) || !memcmp("https://", fn, 8)) {
                     f = prepare_http_get(t, local, fn, chunk_id);
                 } else {
+                    printf("open %s from fallback\n", fn);
                     f = dubtree_open_existing_readonly(fn);
                 }
             }
@@ -1627,7 +1571,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     struct buf_elem *buffered = t->buffered;
 
     Crypto crypto;
-    crypto_init(&crypto, t->header->key);
+    crypto_init(&crypto, t->crypto_key);
     int total_size = 0;
     for (i = 0; i < num_keys; ++i) {
         total_size += CRYPTO_IV_SIZE + sizes[i];
@@ -1993,7 +1937,7 @@ int dubtree_delete(DubTree *t)
 {
     int i, j;
     Crypto crypto;
-    crypto_init(&crypto, t->header->key);
+    crypto_init(&crypto, t->crypto_key);
 
     critical_section_enter(&t->cache_lock);
     for (i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
@@ -2060,18 +2004,6 @@ void dubtree_close(DubTree *t)
         free(*fb++);
     }
     free(t->cache);
-
-#ifdef _WIN32
-    if (!FlushViewOfFile(t->header, 0)) {
-        Wwarn("FlushViewOfFile");
-    }
-    UnmapViewOfFile(t->header);
-#else
-    if (msync(t->header, sizeof(DubTreeHeader), MS_SYNC) != 0) {
-        warn("msync");
-    }
-    munmap(t->header, sizeof(DubTreeHeader));
-#endif
 }
 
 
@@ -2079,7 +2011,7 @@ int dubtree_sanity_check(DubTree *t)
 {
     int i;
     Crypto crypto;
-    crypto_init(&crypto, t->header->key);
+    crypto_init(&crypto, t->crypto_key);
     for (i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
         /* Figure out how many bytes are in use at this level. */
 

@@ -19,7 +19,7 @@ __attribute__((constructor)) static void crypto_global_init(void)
     printf(" done.\n");
 }
 
-void crypto_init(Crypto *crypto, uint8_t *key)
+void crypto_init(Crypto *crypto, const uint8_t *key)
 {
     if (!(crypto->cipher = EVP_aes_256_gcm())) {
         errx(1, "EVP_aes_256_gcm failed");
