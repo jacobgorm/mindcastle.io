@@ -237,6 +237,7 @@ typedef struct BDRVSwapState {
     char *cow_backup;
     uuid_t uuid;
     chunk_id_t top_id;
+    hash_t top_hash;
     uint64_t size;
 
     HashTable cached_blocks;
@@ -753,7 +754,7 @@ static int swap_read_header(BDRVSwapState *s)
     }
     len = st.st_size;
 
-    buff = calloc(1, len);
+    buff = calloc(1, len + 1);
     if (!buff) {
         warn("swap: no memory or file empty");
         fclose(file);
@@ -788,8 +789,11 @@ static int swap_read_header(BDRVSwapState *s)
             s->cache = strdup(line + 6);
         } else if (!strncmp(line, "snapshot=", 9)) {
             unhex(s->top_id.id.bytes, line + 9, sizeof(s->top_id.id.bytes));
+            s->top_id.size = atoi(line + 9 + 2 * sizeof(s->top_id.id.bytes) + 1);
+        } else if (!strncmp(line, "snaphash=", 9)) {
+            unhex(s->top_hash.bytes, line + 9, sizeof(s->top_hash.bytes));
         } else if (!strncmp(line, "key=", 4)) {
-            unhex(s->crypto_key, line + 4, CRYPTO_IV_SIZE);
+            unhex(s->crypto_key, line + 4, CRYPTO_KEY_SIZE);
         }
     }
     /* repair strsep damage */
@@ -829,8 +833,11 @@ static int swap_write_header(BDRVSwapState *s)
     hex(tmp, s->crypto_key, CRYPTO_KEY_SIZE);
     fprintf(f, "key=%s\n", tmp);
 
-    hex(tmp, s->top_id.id.bytes, sizeof(s->top_id.id.bytes)); // XXX constant
-    fprintf(f, "snapshot=%s\n", tmp);
+    hex(tmp, s->top_id.id.bytes, sizeof(s->top_id.id.bytes));
+    fprintf(f, "snapshot=%s:%u\n", tmp, s->top_id.size);
+
+    hex(tmp, s->top_hash.bytes, sizeof(s->top_hash.bytes));
+    fprintf(f, "snaphash=%s\n", tmp);
 
     fclose(f);
     return 0;
@@ -898,8 +905,8 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
         goto out;
     }
 
-    uint8_t zero_key[CRYPTO_IV_SIZE] = {};
-    if (!memcmp(zero_key, s->crypto_key, CRYPTO_IV_SIZE)) {
+    uint8_t zero_key[CRYPTO_KEY_SIZE] = {};
+    if (!memcmp(zero_key, s->crypto_key, CRYPTO_KEY_SIZE)) {
         RAND_bytes(s->crypto_key, sizeof(s->crypto_key));
     }
 
@@ -951,7 +958,7 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
         }
     }
 
-    if (dubtree_init(&s->t, s->crypto_key, s->top_id, s->fallbacks, s->cache,
+    if (dubtree_init(&s->t, s->crypto_key, s->top_id, s->top_hash, s->fallbacks, s->cache,
                 swap_malloc, swap_free, s) != 0) {
         warn("swap: failed to init dubtree");
         r = -1;
@@ -1710,7 +1717,7 @@ int swap_flush(BlockDriverState *bs)
         s->find_context = NULL;
     }
     s->flush = 0;
-    s->top_id = dubtree_checkpoint(&s->t);
+    dubtree_checkpoint(&s->t, &s->top_id, &s->top_hash);
     swap_write_header(s);
     swap_unlock(s);
     return 0;

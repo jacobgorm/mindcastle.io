@@ -21,7 +21,7 @@
 typedef struct {
     union {
         uint64_t first64;
-        uint8_t bytes[512 / 8];
+        uint8_t bytes[256 / 8];
     } id;
     uint32_t size;
 } chunk_id_t;
@@ -44,26 +44,22 @@ static inline int equal_chunk_ids(const chunk_id_t *a, const chunk_id_t *b)
             !memcmp(a->id.bytes, b->id.bytes, sizeof(a->id.bytes)));
 }
 
-typedef struct DubTreeHeader {
-    uint32_t magic, version;
-    uint32_t dubtree_m;
-    uint32_t dubtree_slot_size;
-    uint32_t dubtree_max_levels;
-    chunk_id_t levels[DUBTREE_MAX_LEVELS];
-    hash_t hashes[DUBTREE_MAX_LEVELS];
-} DubTreeHeader;
-
 typedef void (*read_callback) (void *opaque, int result);
 typedef void *(*malloc_callback) (void *opaque, size_t sz);
 typedef void (*free_callback) (void *opaque, void *ptr);
 
 struct CacheLineUserData;
 
+struct level_ptr {
+    int level;
+    chunk_id_t level_id;
+    hash_t level_hash;
+};
+
 typedef struct DubTree {
     critical_section write_lock;
-    DubTreeHeader *header;
-    /*volatile */ chunk_id_t *levels;
-    /*volatile */ hash_t *hashes;
+
+    struct level_ptr first;
 
     const uint8_t *crypto_key;
     char *fallbacks[DUBTREE_MAX_FALLBACKS + 1];
@@ -91,9 +87,11 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
         uint8_t *out, uint8_t *map, uint32_t *sizes,
         read_callback cb, void *opaque, void *ctx);
 
-int dubtree_init(DubTree *t, const uint8_t *key, chunk_id_t top_id, char **fallbacks, char *cache,
+int dubtree_init(DubTree *t, const uint8_t *key,
+        chunk_id_t top_id, hash_t top_hash,
+        char **fallbacks, char *cache,
         malloc_callback malloc_cb, free_callback free_cb, void *opaque);
-chunk_id_t dubtree_checkpoint(DubTree *t);
+int dubtree_checkpoint(DubTree *t, chunk_id_t *top_id, hash_t *top_hash);
 void dubtree_close(DubTree *t);
 int dubtree_delete(DubTree *t);
 void dubtree_quiesce(DubTree *t);
