@@ -9,9 +9,6 @@
 #include <fcntl.h>
 #include <err.h>
 
-#ifndef O_NOATIME
-#define O_NOATIME 01000000
-#endif
 #endif
 
 
@@ -64,7 +61,7 @@ dubtree_open_existing(const char *fn)
             0, NULL,
             OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
 #else
-    return make_handle(open(fn, O_RDWR | O_NOATIME));
+    return make_handle(open(fn, O_RDWR));
 #endif
 }
 
@@ -78,7 +75,7 @@ dubtree_open_existing_readonly(const char *fn)
                 FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM,
             NULL);
 #else
-    return make_handle(open(fn, O_RDONLY | O_NOATIME));
+    return make_handle(open(fn, O_RDONLY));
 #endif
 }
 
@@ -94,7 +91,7 @@ dubtree_open_new(const char *fn, int temp)
             0, NULL,
             OPEN_ALWAYS, flags, NULL);
 #else
-    return make_handle(open(fn, O_RDWR | O_CREAT | O_EXCL | O_NOATIME, 0644));
+    return make_handle(open(fn, O_RDWR | O_CREAT | O_EXCL, 0644));
 #endif
 }
 
@@ -104,7 +101,7 @@ dubtree_open_tmp(const char *dn)
 #ifdef _WIN32
     assert(0);
 #else
-    return make_handle(open(dn, O_RDWR | O_NOATIME | O_TMPFILE, 0644));
+    return make_handle(open(dn, O_RDWR | O_TMPFILE, 0644));
 #endif
 }
 
