@@ -1277,7 +1277,6 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
                 if (!memcmp("http://", fn, 7) || !memcmp("https://", fn, 8)) {
                     f = prepare_http_get(t, local, fn, chunk_id);
                 } else {
-                    printf("open %s from fallback\n", fn);
                     f = dubtree_open_existing_readonly(fn);
                 }
             }
