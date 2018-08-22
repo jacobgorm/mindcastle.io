@@ -10,7 +10,6 @@ void cbf_init(CBF *cbf)
 {
     cbf->counters = NULL;
     cbf->n = 0;
-    cbf_double(cbf);
 }
 
 void cbf_close(CBF *cbf)
