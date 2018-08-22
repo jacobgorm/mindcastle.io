@@ -127,8 +127,11 @@ static void decrypt_node(SimpleTree *st, uint8_t *dst, const uint8_t *src, hash_
 {
     //printf("decrypting with hash %016lx\n", hash.first64);
     assert(hash.first64);
-    decrypt256(st->crypto, dst, src + CRYPTO_IV_SIZE, SIMPLETREE_NODESIZE -
+    int r = decrypt256(st->crypto, dst, src + CRYPTO_IV_SIZE, SIMPLETREE_NODESIZE -
             CRYPTO_IV_SIZE, hash.bytes, src);
+    if (r <= 0) {
+        errx(1, "failed decrypting node");
+    }
 }
 
 static int buffer_node(SimpleTree *st, node_t n)

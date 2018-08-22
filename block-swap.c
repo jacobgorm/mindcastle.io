@@ -1273,11 +1273,13 @@ static int __swap_dubtree_read(BDRVSwapState *s, SwapAIOCB *acb)
         }
     }
 
+    int retries = 0;
     do {
         r = dubtree_find(&s->t, start, end - start, decomp,
                 map, sizes,
                 dubtree_read_complete_cb, acb, s->find_context);
-    } while (r == -EAGAIN);
+    } while (r == -EAGAIN && ++retries < 10);
+    assert(r >= 0);
 
     /* dubtree_find returns 0 for success, <0 for error, >0 if some blocks
      * were unresolved. */

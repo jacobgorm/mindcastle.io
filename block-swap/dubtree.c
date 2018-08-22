@@ -277,6 +277,9 @@ static void decrypt_read(void *opaque, int result)
             if (size > 0) {
                 uint8_t tmp[DUBTREE_BLOCK_SIZE];
                 int dsize = decrypt256(ds->crypto, tmp, src + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE, hash, src);
+                if (dsize <= 0) {
+                    errx(1, "failed decrypting read");
+                }
                 memcpy(dst, tmp, dsize);
                 src += size;
                 dst += dsize;
@@ -1250,6 +1253,12 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
 
     if (hashtable_find(&t->ht, chunk_id.id.first64, &line)) {
         cl = lru_cache_touch_line(&t->lru, line);
+        if (dirty && !cl->dirty) {
+            //printf("%"PRIx64":%u was previously opened non-dirty!\n",
+                    //be64toh(chunk_id.id.first64), chunk_id.size);
+            errno = EEXIST;
+            return DUBTREE_INVALID_HANDLE;
+        }
         ++(cl->users);
         CacheLineUserData *ud = &t->cache_infos[line];
         f = ud->f;
@@ -1300,6 +1309,7 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
             cl->key = chunk_id.id.first64;
             assert(cl->key);
             cl->users = 1;
+            cl->dirty = dirty;
             ud->chunk_id = chunk_id;
             ud->f = f;
             hashtable_insert(&t->ht, chunk_id.id.first64, line);
@@ -1480,13 +1490,16 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
     dubtree_handle_t f = get_chunk(t, chunk_id, 1, 0, &l);
     if (invalid_handle(f)) {
         if (errno == EEXIST) {
-            printf("not writing pre-existing chunk %"PRIx64"\n", chunk_id.id.first64);
+            printf("not writing pre-existing chunk %"PRIx64"\n", be64toh(chunk_id.id.first64));
         } else {
-            err(1, "unable to write chunk %"PRIx64, chunk_id.id.first64);
+            err(1, "unable to write chunk %"PRIx64, be64toh(chunk_id.id.first64));
             goto out;
         }
     } else {
-        dubtree_pwrite(f, c->buf, size, 0);
+        if (dubtree_pwrite(f, c->buf, size, 0) != size) {
+            err(1, "%s: dubtree_pwrite to chunk %"PRIx64" failed",
+                    __FUNCTION__, be64toh(chunk_id.id.first64));
+        }
     }
     t->free_cb(t->opaque, c->buf);
 #endif
@@ -1862,7 +1875,9 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         err(1, "unable to open tree chunk %"PRIx64" for write", tree_chunk.id.first64);
         return -1;
     }
-    dubtree_pwrite(f, st.mem, tree_size, 0);
+    if (dubtree_pwrite(f, st.mem, tree_size, 0) != tree_size) {
+        err(1, "%s: dubtree_pwrite failed", __FUNCTION__);
+    }
     put_chunk(t, l);
     simpletree_close(&st);
 

@@ -217,8 +217,7 @@ dubtree_pwrite(dubtree_handle_t f, const void *buf, size_t sz, uint64_t offset)
             r = pwrite(f->fd, b + offset, left, offset);
         } while (r < 0 && errno == EINTR);
         if (r < 0) {
-            err(1, "pwrite %d %p failed", f->fd, f->opaque);
-            assert(0);
+            return r;
         }
         left -= r;
         offset += r;

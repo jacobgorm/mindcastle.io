@@ -85,7 +85,8 @@ int decrypt256(Crypto *crypto, uint8_t *plaintext, const uint8_t *ciphertext,
 
     int r = EVP_DecryptFinal_ex(ctx, plaintext + len, &len);
     if (r != 1) {
-        errx(1, "EVP_DecryptFinal_ex failed, r=%d", r);
+        warnx("EVP_DecryptFinal_ex failed, r=%d", r);
+        return -1;
     }
     plaintext_len += len;
 
