@@ -1851,12 +1851,17 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         }
     } while (retry);
 
-    /* Finish the combined tree and commit the merge by
-     * installing a globally visible reference to the merged
-     * tree. */
+    /* Find the smallest level that this tree can fit in. */
+    int dest;
+    for (dest = i; ; --dest) {
+        slot_size /= DUBTREE_M;
+        if (dest == 0 || slot_size < total) {
+            break;
+        }
+    }
 
     simpletree_finish(&st);
-    ud->level = i;
+    ud->level = dest;
     ud->next = next;
     ud->size = total;
     ud->fragments = fragments + 1;
@@ -1881,11 +1886,8 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     simpletree_close(&st);
 
     critical_section_enter(&t->cache_lock);
-    struct level_ptr first = {i, tree_chunk, tree_hash};
+    struct level_ptr first = {dest, tree_chunk, tree_hash};
     t->first = first;
-
-    /* Find the smallest level that this tree can fit in, and delete
-     * the rest of the levels from i and up. */
 
     for (j = i; j >= 0; --j) {
         SimpleTree *st = tree_ptrs[j];
