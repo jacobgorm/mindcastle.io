@@ -2,7 +2,6 @@
 #include "dubtree_io.h"
 
 #include "aio.h"
-#include "cbf.h"
 #include "crypto.h"
 #include "dubtree.h"
 #include "lrucache.h"
@@ -40,7 +39,6 @@
 #define CURL_MAX_READ_SIZE (1<<19)
 #endif
 
-static int populate_cbf(DubTree *t, Crypto *crypto);
 static dubtree_handle_t prepare_http_get(DubTree *t,
         int synchronous, const char *url, chunk_id_t chunk_id);
 
@@ -138,9 +136,6 @@ int dubtree_init(DubTree *t, const uint8_t *key,
         t->first.level_id = top_id;
         t->first.level_hash = top_hash;
     }
-
-
-    cbf_init(&t->cbf);
     return 0;
 }
 
@@ -701,36 +696,6 @@ static inline size_t ud_size(const UserData *cud, size_t n)
     return sizeof(*cud) + sizeof(cud->chunk_ids[0]) * n;
 }
 
-static int populate_cbf(DubTree *t, Crypto *crypto)
-{
-    int retry = 1;
-    do {
-        if (retry) {
-            cbf_double(&t->cbf);
-        }
-        retry = 0;
-        struct level_ptr next = t->first;
-        while (next.level >= 0) {
-            SimpleTree st;
-            simpletree_open(&st, crypto, get_chunk_fd(t, next.level_id),
-                    next.level_hash);
-            const UserData *cud = simpletree_get_user(&st);
-            for (int j = 0; j < cud->num_chunks; ++j) {
-                chunk_id_t chunk_id = get_chunk_id(cud, j);
-                if (cbf_add(&t->cbf, chunk_id.id.bytes)) {
-                    retry = 1;
-                    break;
-                }
-            }
-            next = cud->next;
-            simpletree_close(&st);
-        }
-    } while (retry);
-
-    return 0;
-}
-
-
 typedef struct CachedTree {
     struct SimpleTree st;
     chunk_id_t chunk;
@@ -1254,8 +1219,8 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
     if (hashtable_find(&t->ht, chunk_id.id.first64, &line)) {
         cl = lru_cache_touch_line(&t->lru, line);
         if (dirty && !cl->dirty) {
-            //printf("%"PRIx64":%u was previously opened non-dirty!\n",
-                    //be64toh(chunk_id.id.first64), chunk_id.size);
+            errx(1, "%"PRIx64":%u was previously opened non-dirty!\n",
+                    be64toh(chunk_id.id.first64), chunk_id.size);
             errno = EEXIST;
             return DUBTREE_INVALID_HANDLE;
         }
@@ -1427,6 +1392,36 @@ static inline void __free_chunk(DubTree *t, chunk_id_t chunk_id)
 chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
         uint32_t size)
 {
+    /* If copying everything in a chunk, we can just return its id. */
+    int i, j;
+    int total = 0;
+    chunk_id_t *first_chunk_id = &c->crs[0].chunk_id;
+    for (i = 0; i < c->n_crs; ++i) {
+        ChunkReads *cr = &c->crs[i];
+        if (!equal_chunk_ids(&cr->chunk_id, first_chunk_id)) {
+            break;
+        }
+        Read *first = cr->reads;
+        Read *rd;
+        for (j = 0, rd = first; j < cr->num_reads; ++j, ++rd) {
+            total += rd->size;
+        }
+    }
+    if (i == c->n_crs && first_chunk_id->size == total) {
+        chunk_id_t chunk_id = *first_chunk_id;
+        for (j = 0; j < c->n_crs; ++j) {
+            ChunkReads *cr = &c->crs[j];
+            Read *first = cr->reads;
+            free(first);
+        }
+        hashtable_clear(&c->ht);
+        free(c->crs);
+        c->n_crs = 0;
+        c->crs = NULL;
+        return chunk_id;
+    }
+
+
     int l = -1;
     chunk_id_t chunk_id = {};
     CallbackState *cs = calloc(1, sizeof(*cs));
@@ -1526,6 +1521,35 @@ static inline void insert_kv(SimpleTree *st,
     v.size = size;
     v.hash = hash;
     simpletree_insert(st, key, v);
+}
+
+static int u64_cmp(const void *pa, const void *pb) {
+    uint64_t a = *(uint64_t *) pa;
+    uint64_t b = *(uint64_t *) pb;
+    if (a < b) {
+        return -1;
+    } else if (b < a) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+static uint64_t *u64_lower_bound(uint64_t *first, int len, uint64_t key)
+{
+    int half;
+    uint64_t *middle;
+    while (len > 0) {
+        half = len >> 1;
+        middle = first + half;
+        if (*middle < key) {
+            first = middle + 1;
+            len = len - half - 1;
+        } else {
+            len = half;
+        }
+    }
+    return first;
 }
 
 int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
@@ -1683,6 +1707,8 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
             deref[i] = -1;
         }
     }
+    int n_reused = 0;
+    uint64_t *reused = NULL;
 
     for (done = 0;;) {
         /* Loop and copy down until heap empty. */
@@ -1690,64 +1716,50 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         min = heap[0];
         int end = 0;
 
-        /* Anything to flush before we consume input? */
+        /* Anything to flush from current chunk before we switch to another one? */
         if (n_buffered && ((!equal_chunk_ids(&last_chunk_id, &min->chunk_id)) || done ||
                     chunk_exceeded(t_buffered))) {
             int q;
+            uint32_t b0 = b;
+            uint32_t offset0 = buffered[0].offset;
 
-            if (chunk_exceeded(t_buffered) && valid_chunk_id(&last_chunk_id)) {
+            for (q = 0; q < n_buffered; ++q) {
 
-                /* Handle the case of merging an entire chunk as-is, to avoid
-                 * rewriting it. In the case where we filled an entire chunk
-                 * from the newly inserted keys, there will be no valid chunk
-                 * id set for them, which we check for by requiring a valid
-                 * last_chunk_id. */
-
-                int chunk = add_chunk_id(&ud);
-                set_chunk_id(ud, chunk, last_chunk_id);
-                for (q = 0; q < n_buffered; ++q) {
-                    e = &buffered[q];
-                    insert_kv(&st, e->key, chunk, e->offset, e->size, e->hash);
-                    total += e->size;
-                }
-
-            } else {
-
-                uint32_t b0 = b;
-                uint32_t offset0 = buffered[0].offset;
-
-                for (q = 0; q < n_buffered; ++q) {
-
+                if (!out) {
+                    out = calloc(1, sizeof(Chunk));
                     if (!out) {
-                        out = calloc(1, sizeof(Chunk));
-                        if (!out) {
-                            warnx("%s: calloc failed on line %d",
-                                    __FUNCTION__, __LINE__);
-                            return -1;
-                        }
-                        out_chunk = add_chunk_id(&ud);
+                        warnx("%s: calloc failed on line %d",
+                                __FUNCTION__, __LINE__);
+                        return -1;
                     }
-
-                    e = &buffered[q];
-                    insert_kv(&st, e->key, out_chunk, b, e->size, e->hash);
-                    total += e->size;
-                    b += e->size;
-
-                    if (chunk_exceeded(b)) {
-                        read_chunk(t, out, last_chunk_id, b0, offset0, b - b0);
-                        offset0 = e->offset + e->size;
-
-                        out_id = write_chunk(t, out, encrypted_values, b);
-                        set_chunk_id(ud, out_chunk, out_id);
-                        out_chunk = -1;
-                        out = NULL;
-                        b0 = b = 0;
-                    }
-
+                    out_chunk = add_chunk_id(&ud);
                 }
-                if (out) {
+
+                e = &buffered[q];
+                insert_kv(&st, e->key, out_chunk, b, e->size, e->hash);
+                total += e->size;
+                b += e->size;
+
+                if (chunk_exceeded(b)) {
                     read_chunk(t, out, last_chunk_id, b0, offset0, b - b0);
+                    offset0 = e->offset + e->size;
+
+                    out_id = write_chunk(t, out, encrypted_values, b);
+                    if (equal_chunk_ids(&last_chunk_id, &out_id)) {
+                        if (!((n_reused - 1) & n_reused)) {
+                            reused = realloc(reused, sizeof(uint64_t) * (n_reused ? 2 * n_reused : 1));
+                        }
+                        reused[n_reused++] = out_id.id.first64;
+                    }
+                    set_chunk_id(ud, out_chunk, out_id);
+                    out_chunk = -1;
+                    out = NULL;
+                    b0 = b = 0;
                 }
+
+            }
+            if (out) {
+                read_chunk(t, out, last_chunk_id, b0, offset0, b - b0);
             }
             n_buffered = t_buffered = 0;
         }
@@ -1839,18 +1851,6 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         sift_down(t, heap, j);
     }
 
-    int retry = 0;
-    do {
-        retry = 0;
-        for (int i = 0; i < ud->num_chunks && !retry; ++i) {
-            chunk_id_t chunk_id = get_chunk_id(ud, i);
-            retry = cbf_add(&t->cbf, chunk_id.id.bytes);
-        }
-        if (retry) {
-            populate_cbf(t, &crypto);
-        }
-    } while (retry);
-
     /* Find the smallest level that this tree can fit in. */
     int dest;
     for (dest = i; ; --dest) {
@@ -1868,7 +1868,6 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     ud->garbage = garbage;
     simpletree_set_user(&st, ud, ud_size(ud, ud->num_chunks));
     free(ud);
-
 
     uint32_t tree_size = simpletree_get_nodes_size(&st);
     hash_t tree_hash = simpletree_encrypt(&st);
@@ -1889,15 +1888,18 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     struct level_ptr first = {dest, tree_chunk, tree_hash};
     t->first = first;
 
+    qsort(reused, n_reused, sizeof(uint64_t), u64_cmp);
     for (j = i; j >= 0; --j) {
         SimpleTree *st = tree_ptrs[j];
         if (st) {
-            int k;
-            cud = simpletree_get_user(st);
-            for (k = 0; k < cud->num_chunks; ++k) {
-                chunk_id_t dead_chunk_id = cud->chunk_ids[k];
-                if (cbf_remove(&t->cbf, dead_chunk_id.id.bytes)) {
-                    __free_chunk(t, dead_chunk_id);
+            if (j != i) {
+                cud = simpletree_get_user(st);
+                for (int k = 0; k < cud->num_chunks; ++k) {
+                    chunk_id_t dead_chunk_id = cud->chunk_ids[k];
+                    uint64_t *lb = u64_lower_bound(reused, n_reused, dead_chunk_id.id.first64);
+                    if (lb == &reused[n_reused] || *lb != dead_chunk_id.id.first64) {
+                        __free_chunk(t, dead_chunk_id);
+                    }
                 }
             }
             simpletree_close(st);
@@ -1906,6 +1908,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     }
     critical_section_leave(&t->cache_lock);
     critical_section_leave(&t->write_lock);
+    free(reused);
     free(deref);
     free(hashes);
     free(encrypted_values);
@@ -1974,7 +1977,6 @@ void dubtree_close(DubTree *t)
     }
     free(t->cache_infos);
     lru_cache_close(&t->lru);
-    cbf_close(&t->cbf);
 
     free(t->buffered);
 

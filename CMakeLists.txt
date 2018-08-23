@@ -23,7 +23,6 @@ add_library(swap SHARED
     block-swap/dubtree.c
     block-swap/hashtable.c
     block-swap/simpletree.c
-    block-swap/cbf.c
     )
 
 install(TARGETS swap

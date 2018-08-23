@@ -8,7 +8,6 @@
 #endif
 
 #include "dubtree_constants.h"
-#include "cbf.h"
 #include "crypto.h"
 #include "hashtable.h"
 #include "lrucache.h"
@@ -68,7 +67,6 @@ typedef struct DubTree {
     HashTable ht;
     LruCache lru;
     struct CacheLineUserData *cache_infos;
-    CBF cbf;
     int buffer_max;
     void *buffered;
     malloc_callback malloc_cb;
