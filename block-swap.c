@@ -1214,8 +1214,6 @@ static void dubtree_read_complete_cb(void *opaque, int result)
                     memcpy(o, tmp, count);
                 }
                 t += sz;
-            } else {
-                memset(o, 0, SWAP_SECTOR_SIZE);
             }
 
             o += SWAP_SECTOR_SIZE;
@@ -1381,6 +1379,9 @@ BlockDriverAIOCB *swap_aio_read(BlockDriverState *bs,
     uint8_t *tmp = NULL;
     uint8_t *map;
     ssize_t found;
+
+    /* XXX we should use the map to do this more precisely. */
+    memset(buf, 0, nb_sectors << BDRV_SECTOR_BITS);
 
     if (modulo) {
         tmp = malloc(size);
