@@ -17,13 +17,6 @@
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 
-#define DUBTREE_FILE_MAGIC_MMAP 0x73776170
-
-#define DUBTREE_FILE_VERSION 15
-
-#define DUBTREE_MMAPPED_NAME "top.lvl"
-
-
 #ifndef _WIN32
 //#include <aio.h>
 #include <sys/mman.h>
@@ -1942,23 +1935,16 @@ int dubtree_delete(DubTree *t)
     }
     critical_section_leave(&t->cache_lock);
     crypto_close(&crypto);
-
-    char *mn;
-    asprintf(&mn, "%s/"DUBTREE_MMAPPED_NAME, t->fallbacks[0]);
-
     char *dn;
     dn = strdup(t->fallbacks[0]);
 
     dubtree_close(t);
 
-    if (unlink(mn) < 0) {
-        warn("unable to unlink %s", mn);
-        return -1;
-    }
     if (rmdir(dn) < 0) {
         warn("unable to rmdir %s", dn);
         return -1;
     }
+    free(dn);
 
     return 0;
 }

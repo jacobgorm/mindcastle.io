@@ -23,4 +23,5 @@ int swap_flush(BlockDriverState *bs);
 void swap_close(BlockDriverState *bs);
 int swap_create(const char *filename, int64_t size, int flags);
 int swap_open(BlockDriverState *bs, const char *filename, int flags);
+int swap_remove(BlockDriverState *bs);
 int swap_ioctl(BlockDriverState *bs, unsigned long int req, void *buf);

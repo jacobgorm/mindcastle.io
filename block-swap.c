@@ -1035,9 +1035,7 @@ out:
     return r;
 }
 
-/* Delete the snapshot referenced by this backend instance,
- * and the .swap file on disk. */
-/*static*/ int swap_remove(BlockDriverState *bs)
+int swap_remove(BlockDriverState *bs)
 {
     int r;
     BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
