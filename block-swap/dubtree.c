@@ -2007,7 +2007,7 @@ int dubtree_sanity_check(DubTree *t)
                 idx = k.value.chunk;
                 chunk_id = get_chunk_id(cud, k.value.chunk);
             }
-            cf = get_chunk(t, chunk_id, 0, 0, &l);
+            cf = get_chunk(t, chunk_id, 0, 1, &l);
             if (invalid_handle(cf)) {
                 warn("unable to read chunk %"PRIx64, chunk_id.id.first64);
                 return -1;
