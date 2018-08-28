@@ -41,6 +41,7 @@ static dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id,
                                        int dirty, int local, int *l);
 static dubtree_handle_t get_chunk(DubTree *t, chunk_id_t chunk_id,
                                      int dirty, int local, int *l);
+static int __get_chunk_fd(DubTree *t, chunk_id_t chunk_id);
 static int get_chunk_fd(DubTree *t, chunk_id_t chunk_id);
 static chunk_id_t content_id(const uint8_t *in, int size);
 
@@ -86,7 +87,6 @@ int dubtree_init(DubTree *t, const uint8_t *key,
     const int log_cache_lines = 4;
     lru_cache_init(&t->lru, log_cache_lines);
     t->cache_infos = calloc(1 << log_cache_lines, sizeof(CacheLineUserData));
-    critical_section_leave(&t->cache_lock);
 
     fb = t->fallbacks;
     for (i = 0; i < sizeof(t->fallbacks) / sizeof(t->fallbacks[0]); ++i) {
@@ -121,7 +121,7 @@ int dubtree_init(DubTree *t, const uint8_t *key,
         SimpleTree st;
         Crypto crypto;
         crypto_init(&crypto, t->crypto_key);
-        simpletree_open(&st, &crypto, get_chunk_fd(t, top_id), top_hash);
+        simpletree_open(&st, &crypto, __get_chunk_fd(t, top_id), top_hash);
         crypto_close(&crypto);
         const UserData *cud = simpletree_get_user(&st);
         t->first.level = cud->level;
@@ -129,6 +129,7 @@ int dubtree_init(DubTree *t, const uint8_t *key,
         t->first.level_id = top_id;
         t->first.level_hash = top_hash;
     }
+    critical_section_leave(&t->cache_lock);
     return 0;
 }
 
@@ -1081,6 +1082,7 @@ static chunk_id_t content_id(const uint8_t *in, int size)
 static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
 {
     int done = 0;
+    int r;
     HttpGetState *hgs = opaque;
 
     memcpy(hgs->buffer + hgs->offset, ptr, size * nmemb);
@@ -1104,10 +1106,16 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
             if (equal_chunk_ids(&real_id, &hgs->chunk_id)) {
                 DubTree *t = hgs->t;
                 char *fn = name_chunk(t->cache, hgs->chunk_id);
-                int r = linkat(AT_FDCWD, procfn, AT_FDCWD, fn, AT_SYMLINK_FOLLOW);
+#if 0
+                r = msync(hgs->buffer, hgs->size, MS_SYNC);
+                if (r < 0) {
+                    err(1, "msync failed for %d\n", hgs->fd);
+                }
+#endif
+                r = linkat(AT_FDCWD, procfn, AT_FDCWD, fn, AT_SYMLINK_FOLLOW);
                 close(hgs->fd);
                 if (r < 0 && errno != EEXIST) {
-                    err(1, "linkat failed for %d -> %s", hgs->fd, fn);
+                    warn("linkat failed for %d -> %s", hgs->fd, fn);
                 }
                 free(fn);
             } else {

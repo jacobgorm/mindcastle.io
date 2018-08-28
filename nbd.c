@@ -351,6 +351,11 @@ int main(int argc, char **argv)
         exit(1);
     }
 
+    struct client_info *ci = malloc(sizeof(struct client_info));
+    ci->sock = sp[0];
+    ci->bs = &bs;
+    swap_aio_add_wait_object(ci->sock, got_data, ci);
+
     uuid_t uuid;
     swap_ioctl(&bs, 0, uuid);
     char uuid_str[37];
@@ -368,11 +373,6 @@ int main(int argc, char **argv)
     } else {
         shell(script, "open", NULL);
     }
-
-    struct client_info *ci = malloc(sizeof(struct client_info));
-    ci->sock = sp[0];
-    ci->bs = &bs;
-    swap_aio_add_wait_object(ci->sock, got_data, ci);
 
     while (!should_exit) {
         swap_aio_wait();
