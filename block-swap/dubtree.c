@@ -1150,8 +1150,8 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
 
     if (done) {
         critical_section_enter(&hgs->lock);
-        hgs->buffer = NULL;
         unmap_file(hgs->buffer, hgs->size);
+        hgs->buffer = NULL;
         critical_section_leave(&hgs->lock);
     }
 
