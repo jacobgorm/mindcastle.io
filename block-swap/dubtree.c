@@ -1976,68 +1976,65 @@ void dubtree_close(DubTree *t)
 
 int dubtree_sanity_check(DubTree *t)
 {
-    int i;
     Crypto crypto;
     crypto_init(&crypto, t->crypto_key);
     struct level_ptr next = t->first;
-    for (i = 0; i < DUBTREE_MAX_LEVELS; ++i) {
-        /* Figure out how many bytes are in use at this level. */
+    /* Figure out how many bytes are in use at this level. */
+    SimpleTree st;
+    while (next.level >= 0) {
+        int i = next.level;
+        dubtree_handle_t cf;
+        SimpleTreeIterator it;
+        const UserData *cud;
 
-        SimpleTree st;
-        while (next.level >= 0) {
-            dubtree_handle_t cf;
-            SimpleTreeIterator it;
-            const UserData *cud;
+        printf("get level %d\n", i);
+        simpletree_open(&st, &crypto, get_chunk_fd(t, next.level_id), next.level_hash);
+        simpletree_begin(&st, &it);
+        cud = simpletree_get_user(&st);
+        printf("check level %d\n", i);
+        printf("level %d has %d chunks, garbage=%lu\n", i, cud->num_chunks, cud->garbage);
+        int idx = -1;
+        while (!simpletree_at_end(&st, &it)) {
+            SimpleTreeResult k;
+            uint8_t in[2 * DUBTREE_BLOCK_SIZE];
+            //uint8_t out[DUBTREE_BLOCK_SIZE];
+            chunk_id_t chunk_id;
+            int l;
+            int got;
 
-            printf("get level %d\n", i);
-            simpletree_open(&st, &crypto, get_chunk_fd(t, next.level_id), next.level_hash);
-            simpletree_begin(&st, &it);
-            cud = simpletree_get_user(&st);
-            printf("check level %d\n", i);
-            printf("level %d has %d chunks, garbage=%lu\n", i, cud->num_chunks, cud->garbage);
-            int idx = -1;
-            while (!simpletree_at_end(&st, &it)) {
-                SimpleTreeResult k;
-                uint8_t in[2 * DUBTREE_BLOCK_SIZE];
-                //uint8_t out[DUBTREE_BLOCK_SIZE];
-                chunk_id_t chunk_id;
-                int l;
-                int got;
+            k = simpletree_read(&st, &it);
+            if (idx != k.value.chunk) {
+                idx = k.value.chunk;
+                chunk_id = get_chunk_id(cud, k.value.chunk);
+            }
+            cf = get_chunk(t, chunk_id, 0, 0, &l);
+            if (invalid_handle(cf)) {
+                warn("unable to read chunk %"PRIx64, chunk_id.id.first64);
+                return -1;
+            }
+            got = dubtree_pread(cf, in, k.value.size, k.value.offset);
+            if (got != k.value.size) {
+                err(1, "dubtree pread failed");
+            }
+            put_chunk(t, l);
 
-                k = simpletree_read(&st, &it);
-                if (idx != k.value.chunk) {
-                    idx = k.value.chunk;
-                    chunk_id = get_chunk_id(cud, k.value.chunk);
-                }
-                cf = get_chunk(t, chunk_id, 0, 0, &l);
-                if (invalid_handle(cf)) {
-                    warn("unable to read chunk %"PRIx64, chunk_id.id.first64);
+            int sz = k.value.size;
+            if (sz < DUBTREE_BLOCK_SIZE) {
+#if 0
+                int unsz = LZ4_decompress_safe((const char*)in, (char*)out,
+                        sz, DUBTREE_BLOCK_SIZE);
+                if (unsz != DUBTREE_BLOCK_SIZE) {
+                    printf("%d vs %d, offset=%u size=%u\n", unsz, sz,
+                            k.value.offset, sz);
                     return -1;
                 }
-                got = dubtree_pread(cf, in, k.value.size, k.value.offset);
-                if (got != k.value.size) {
-                    err(1, "dubtree pread failed");
-                }
-                put_chunk(t, l);
-
-                int sz = k.value.size;
-                if (sz < DUBTREE_BLOCK_SIZE) {
-#if 0
-                    int unsz = LZ4_decompress_safe((const char*)in, (char*)out,
-                                                   sz, DUBTREE_BLOCK_SIZE);
-                    if (unsz != DUBTREE_BLOCK_SIZE) {
-                        printf("%d vs %d, offset=%u size=%u\n", unsz, sz,
-                               k.value.offset, sz);
-                        return -1;
-                    }
 #endif
-                }
-
-                simpletree_next(&st, &it);
             }
-            next = cud->next;
-            simpletree_close(&st);
+
+            simpletree_next(&st, &it);
         }
+        next = cud->next;
+        simpletree_close(&st);
     }
     crypto_close(&crypto);
     return 0;
