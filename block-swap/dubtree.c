@@ -1508,10 +1508,25 @@ out:
 }
 
 
-static inline int chunk_exceeded(size_t size)
+const int min_io_sz = 1 << 22;
+static inline int chunk_exceeded(hash_t hash, size_t size)
 {
-    return (size + DUBTREE_BLOCK_SIZE - 1 > (1 << 20));
+    return !(hash.first64 & ~(~0ULL >> 11ULL)) || (size > min_io_sz);
 }
+
+static inline __uint128_t rol128(__uint128_t a)
+{
+    return (a << 1) | (a >> 127);
+}
+
+static inline hash_t update_hash(hash_t h1, hash_t h2)
+{
+    __uint128_t a = h1.first128;
+    __uint128_t b = h2.first128;
+    hash_t r = { rol128(a) ^ b };
+    return r;
+}
+
 
 static inline void insert_kv(SimpleTree *st,
         uint64_t key, int chunk, int offset, int size, hash_t hash)
@@ -1597,6 +1612,11 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     for (i = 0; i < num_keys; ++i, hash += CRYPTO_TAG_SIZE) {
         int size = sizes[i];
         RAND_bytes(enc, CRYPTO_IV_SIZE);
+#if 0
+        uint8_t tmp[512 / 8];
+        SHA512(v, size, tmp); // XXX use key to make this HMAC
+        memcpy(enc, tmp, CRYPTO_IV_SIZE);
+#endif
         sizes[i] = CRYPTO_IV_SIZE + encrypt256(&crypto, enc + CRYPTO_IV_SIZE,
                 hash, v, size, enc);
         v += size;
@@ -1689,6 +1709,9 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     uint32_t b = 0;
     int n_buffered = 0;
     int t_buffered = 0;
+    hash_t nil_hash = {};
+    hash_t t_hash = nil_hash;
+    hash_t b_hash = nil_hash;
     uint64_t total = 0;
     int min_idx = 0;
     uint32_t min_offset = 0;
@@ -1719,7 +1742,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
 
         /* Anything to flush from current chunk before we switch to another one? */
         if (n_buffered && ((!equal_chunk_ids(&last_chunk_id, &min->chunk_id)) || done ||
-                    chunk_exceeded(t_buffered))) {
+                    chunk_exceeded(t_hash, t_buffered))) {
             int q;
             uint32_t b0 = b;
             uint32_t offset0 = buffered[0].offset;
@@ -1740,8 +1763,9 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
                 insert_kv(&st, e->key, out_chunk, b, e->size, e->hash);
                 total += e->size;
                 b += e->size;
+                b_hash = update_hash(b_hash, e->hash);
 
-                if (chunk_exceeded(b)) {
+                if (chunk_exceeded(b_hash, b)) {
                     read_chunk(t, out, last_chunk_id, b0, offset0, b - b0);
                     offset0 = e->offset + e->size;
 
@@ -1756,6 +1780,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
                     out_chunk = -1;
                     out = NULL;
                     b0 = b = 0;
+                    b_hash = nil_hash;
                 }
 
             }
@@ -1763,6 +1788,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
                 read_chunk(t, out, last_chunk_id, b0, offset0, b - b0);
             }
             n_buffered = t_buffered = 0;
+            t_hash = nil_hash;
         }
         if (done) {
             if (out) {
@@ -1809,6 +1835,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
                 e->size = min->size;
                 e->hash = min->hash;
                 t_buffered += min->size;
+                t_hash = update_hash(t_hash, min->hash);
             }
         } else {
             garbage += min->size;
@@ -2017,7 +2044,7 @@ int dubtree_sanity_check(DubTree *t)
             }
             cf = get_chunk(t, chunk_id, 0, 1, &l);
             if (invalid_handle(cf)) {
-                warn("unable to read chunk %"PRIx64, chunk_id.id.first64);
+                warn("unable to read chunk %"PRIx64, be64toh(chunk_id.id.first64));
                 return -1;
             }
             got = dubtree_pread(cf, in, k.value.size, k.value.offset);
