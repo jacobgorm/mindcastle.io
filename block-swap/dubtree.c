@@ -1651,10 +1651,15 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     const uint8_t *v = values;
     for (i = 0; i < num_keys; ++i, hash += CRYPTO_TAG_SIZE) {
         int size = sizes[i];
-        RAND_bytes(enc, CRYPTO_IV_SIZE);
-#if 0
+        //RAND_bytes(enc, CRYPTO_IV_SIZE);
+        //SHA512(v, size, tmp); // XXX use key to make this HMAC
+#if 1
         uint8_t tmp[512 / 8];
-        SHA512(v, size, tmp); // XXX use key to make this HMAC
+        SHA512_CTX ctx;
+        SHA512_Init(&ctx);
+        SHA512_Update(&ctx, crypto.key, CRYPTO_KEY_SIZE);
+        SHA512_Update(&ctx, v, size);
+        SHA512_Final(tmp, &ctx);
         memcpy(enc, tmp, CRYPTO_IV_SIZE);
 #endif
         sizes[i] = CRYPTO_IV_SIZE + encrypt256(&crypto, enc + CRYPTO_IV_SIZE,
