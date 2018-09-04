@@ -1545,12 +1545,12 @@ out:
 }
 
 
-const int min_io_sz = 1 << 22;
+const int min_io_sz = 1 << 18;
+const int max_io_sz = 1 << 22;
 static inline int chunk_exceeded(hash_t hash, size_t size)
 {
-    const uint64_t mask = ~(~0ULL >> 11ULL);
-    //printf("hash %016lx mask %016lx size %lu\n", hash.first64, mask, size);
-    return ((hash.first64 & mask) == mask) || (size > min_io_sz);
+    const uint64_t mask = ~(~0ULL >> 9ULL);
+    return (((hash.first64 & mask) == mask) && size > min_io_sz) || (size > max_io_sz);
 }
 
 static inline __uint128_t rol128(__uint128_t a)
@@ -1560,6 +1560,7 @@ static inline __uint128_t rol128(__uint128_t a)
 
 static inline hash_t update_hash(hash_t h1, hash_t h2)
 {
+    assert(h2.first64);
     __uint128_t a = h1.first128;
     __uint128_t b = h2.first128;
     hash_t r = { rol128(a) ^ b };
