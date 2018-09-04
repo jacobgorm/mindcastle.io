@@ -1271,9 +1271,14 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
             free(fn);
             fn = name_chunk(*fb, chunk_id);
             if (fb == t->fallbacks) {
-                f = dirty ?
-                    dubtree_open_new(fn, 0) :
-                    dubtree_open_existing_readonly(fn);
+                if (dirty) {
+                    f = dubtree_open_new(fn, 0);
+                    if (invalid_handle(f)) {
+                        break;
+                    }
+                } else {
+                    f = dubtree_open_existing_readonly(fn);
+                }
             } else {
                 if (!memcmp("http://", fn, 7) || !memcmp("https://", fn, 8)) {
                     f = prepare_http_get(t, local, fn, chunk_id);
