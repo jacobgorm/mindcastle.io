@@ -191,6 +191,17 @@ static void got_data(void *opaque)
 
                 break;
             }
+            case NBD_CMD_TRIM: {
+                printf("got TRIM!\n");
+                assert(!(len % 4096));
+                r = safe_write(ci->sock, &reply, sizeof(reply));
+                int len = ntohl(request.len);
+                uint64_t offset = be64toh(request.from);
+                uint8_t *zero = calloc(1, len);
+                swap_aio_write(ci->bs, offset / 512, zero, len / 512, nbd_write_done, zero);
+                swap_aio_add_wait_object(ci->sock, got_data, ci);
+                break;
+            }
 
             default: {
                 printf("default %x\n", ntohl(request.type));
