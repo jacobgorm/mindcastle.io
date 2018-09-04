@@ -67,6 +67,7 @@ typedef struct DubTree {
     HashTable ht;
     LruCache lru;
     struct CacheLineUserData *cache_infos;
+    HashTable refcounts_ht;
     int buffer_max;
     void *buffered;
     malloc_callback malloc_cb;
