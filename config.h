@@ -77,17 +77,16 @@ critical_section_enter(critical_section *cs)
 }
 
 static inline void
-critical_section_leave(critical_section *cs, const char *fn, int l)
+critical_section_leave(critical_section *cs)
 {
     int ret;
 
     ret = pthread_mutex_unlock(cs);
     if (ret) {
         errno = ret;
-        err(1, "%s: pthread_mutex_unlock failed @ %s:%d", __FUNCTION__, fn, l);
+        err(1, "%s: pthread_mutex_unlock failed", __FUNCTION__);
     }
 }
-#define critical_section_leave(__a) critical_section_leave((__a), __FUNCTION__, __LINE__)
 
 #include <sys/time.h>
 static inline uint64_t os_get_clock(void)
