@@ -1456,7 +1456,6 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
         free(c->crs);
         c->n_crs = 0;
         c->crs = NULL;
-        printf("reuse chunk\n");
         return chunk_id;
     }
 
