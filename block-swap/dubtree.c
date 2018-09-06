@@ -83,6 +83,7 @@ static inline int chunk_deref(DubTree *t, chunk_id_t chunk_id)
         return --(e->value);
     }
     assert(0);
+    return -1;
 }
 
 static inline void chunk_ref(DubTree *t, chunk_id_t chunk_id)
