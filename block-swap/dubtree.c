@@ -967,7 +967,6 @@ out:
         free(versions);
     }
     return r; /* negative for error, positive if unresolved blocks. */
-return 0;//XXX
 }
 
 
