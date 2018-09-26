@@ -1,3 +1,5 @@
+# Welcome to Mindcastle.io
+
 This repository contains the Mindcastle.io (formerly oneroot) distributed block
 device, whose aim is to eventually become the 'git for storage'. It is
 currently mostly useful for local use, and for creating read-only mounts that
@@ -7,9 +9,11 @@ objects on demand, but currently you have to push them to the cloud or your own
 HTTP server, e.g, using a tool like rclone or rsync. The block devices operates
 over a compressed and encrypted database-like structure, somewhat similar to
 LevelDB or RocksDB, but optimized for block storage. The code is forked from
-Bromium's internal ".swap" storage engine, which is the storage component on
+Bromium's internal ".swap" storage engine, which is the storage component of
 that company's ground-breaking micro-virtualization security technology, and
 has (anecdotally) been used to launch more VMs than Amazon AWS.
+
+## Building
 
 To build on debian/ubuntu, you need to install:
 
@@ -25,12 +29,20 @@ installed and running.
 
 Then you can build with:
 
-$ make
+```bash
+make
+```
+All that make does here is act as a think wrapper around the usual cmake and ninja dance, 
+so feel free to use that instead if you prefer.
 
-Run with (must be root, prefix with sudo if that is your thing):
+## Running
 
-# modprobe nbd
-# oneroot mydisk.swap ./statechance.sh
+You can run mindcastle's NBD backend with (must be root, prefix with sudo if that is your thing):
+
+```bash
+modprobe nbd
+oneroot mydisk.swap ./statechange.sh
+```
 
 oneroot implements a user-space block device on top of Linux' nbd module.  The
 mydisk.swap file is a tiny meta-data text file that will be created if not
@@ -44,41 +56,49 @@ automatically syncing files to the file system and then unmounting it when done.
 
 If you peek inside swapdata-UUID, you will see a lot of regularly-sized files
 (currently the chunking size is set to 1MiB) with some insanely long file names.
-The file names are derived from the blake2b-hashes of the file contents, as you
-can verify by running the 'b2sum' tool against one of them. There is one file that is
-special, it is called 'top.lvl' and represents the root of the tree structure. If you wanted to
-create a writable snapshot of the disk state, you could do it like this:
-
-# sync
-# mkdir my-swapshot
-# ln swapdata-UUID/* -t my-snapshot
-
-And if you wanted to publish it on an HTTP server, say running out of /srv/http, you would do
+The file names are derived from the sha512 hashes of the file contents, as you
+can verify by running the 'sha512' tool against one of them (the hashes get truncated
+at 256 bits when used for filenames). If you wanted to publish it on an HTTP server, say running out of /srv/http, you would do
 something line this (assuming the HTTP server serves files out /srv/http and there is a http
 user on the system that the server is running as):
 
-# cp -r swapdata-UUID /srv/http
-# chown -R http /srv/http/swapdata-UUID 
+```bash
+cp -r swapdata-UUID /srv/http
+chown -R http /srv/http/swapdata-UUID 
+```
 
 Then, to be able to mount HTTP-repo from another host, you would copy and edit
 mydisk.swap to look something like this:
 
+```
 uuid=cc3e3ede-9e75-4b41-8405-8f9f1c6b8473
 size=104857600
-fallback=http://localhost/swapdata-cc3e3ede-9e75-4b41-8405-8f9f1c6b8473
+key=cbb912b197d406ec178aa1c4ac3366c2c8652f169430e64d3393b2ba428fd52c
+snapshot=ce7804a3803912e552a83280d3a6191c4d44f5c5c88c30a062845c2222a8c5a3:327680
+snaphash=6a0574d06f0e6f967635b0e0737f9c88
+
+fallback=http://myhostname/swapdata-cc3e3ede-9e75-4b41-8405-8f9f1c6b8473
+```
+
+Here, we added the `fallback=` line to point to the location of the HTTP
+server acting as the storage backend.
 
 Then, on the client machine, you could connect the block device with:
 
-# oneroot mydisk.swap ./stagechange.sh
+```bash
+oneroot mydisk.swap ./stagechange.sh
+```
 
-Where "./stagechange.sh" is the path to the default statechance script, which will
-format the volume as XFS if necessary, and mount and later unmount it under
+Where "./stagechange.sh" is the path to the default stagechange script, which will
+format the volume if necessary, and mount and later unmount it under
 /tmp/mnt-UUID. The script interacts with the oneroot process using signals,
 and the user can do this too. For example, to trigger a clean unmount and
 shutdown, just do a
 
-# kill -1 PID
+```bash
+kill -1 PID
+```
 
 Where PID is that of the first oneroot process, you should see this logged
-by the script on startup. See the statechance.sh script comments for more
+by the script on startup. See the stagechange.sh script comments for more
 details.
