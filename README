@@ -1,10 +1,15 @@
-This repository contains the 'oneroot' distributed block device, whose aim is
-to eventually become the 'git for storage'. It is currently mostly useful for
-local use, and for creating read-only mounts that can be exported simply by
-placing the chunked files it creates on an HTTP somewhere, for instance on S3
-or Google Storage. It supports fetching remote objects on demand, but currently
-you have to push them to the cloud or your own HTTP server, e.g, using a tool
-like rclone or rsync.
+This repository contains the Mindcastle.io (formerly oneroot) distributed block
+device, whose aim is to eventually become the 'git for storage'. It is
+currently mostly useful for local use, and for creating read-only mounts that
+can be exported simply by placing the chunked files it creates on an HTTP
+somewhere, for instance on S3 or Google Storage. It supports fetching remote
+objects on demand, but currently you have to push them to the cloud or your own
+HTTP server, e.g, using a tool like rclone or rsync. The block devices operates
+over a compressed and encrypted database-like structure, somewhat similar to
+LevelDB or RocksDB, but optimized for block storage. The code is forked from
+Bromium's internal ".swap" storage engine, which is the storage component on
+that company's ground-breaking micro-virtualization security technology, and
+has (anecdotally) been used to launch more VMs than Amazon AWS.
 
 To build on debian/ubuntu, you need to install:
 
@@ -13,6 +18,7 @@ To build on debian/ubuntu, you need to install:
 * liblz4-dev
 * libcurl4-gnutls-dev (or other libcurl-dev package)
 * uuid-dev
+* libssl-dev
 
 And to run well you should have the "haveged" entropy gathering service
 installed and running.
@@ -24,7 +30,7 @@ $ make
 Run with (must be root, prefix with sudo if that is your thing):
 
 # modprobe nbd
-# oneroot mydisk.swap
+# oneroot mydisk.swap ./statechance.sh
 
 oneroot implements a user-space block device on top of Linux' nbd module.  The
 mydisk.swap file is a tiny meta-data text file that will be created if not
@@ -32,7 +38,9 @@ there already. The actual disk contents will go inside a directory called
 swapdata-UUID, where UUID gets randomly generated. As long as oneroot is
 running, you now have an empty block device that you can format and use
 as any other block device. (To not have to do this manually each time, the
-script "stagechange.sh" takes care to do this automically.)
+script "stagechange.sh" takes care to do this automically, you can edit the
+script to choose the type of filesystem or perform automated tasks on, e.g,
+automatically syncing files to the file system and then unmounting it when done.)
 
 If you peek inside swapdata-UUID, you will see a lot of regularly-sized files
 (currently the chunking size is set to 1MiB) with some insanely long file names.
