@@ -2,7 +2,7 @@
 
 This repository contains the Mindcastle.io (formerly oneroot) distributed block
 device, whose aim is to eventually become the 'git for storage'. It is
-currently mostly useful for local use, and for creating read-only mounts that
+currently mostly useful for local use, and for creating locally writable mounts that
 can be exported simply by placing the chunked files it creates on an HTTP
 somewhere, for instance on S3 or Google Storage. It supports fetching remote
 objects on demand, but currently you have to push them to the cloud or your own
