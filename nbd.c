@@ -238,7 +238,7 @@ int main(int argc, char **argv)
     }
     char *script = argv[2];
 
-    shell("modprobe", "nbd", NULL);
+    shell("/sbin/modprobe", "nbd", NULL);
 
     r = mlockall(MCL_CURRENT | MCL_FUTURE);
     if (r < 0) {
