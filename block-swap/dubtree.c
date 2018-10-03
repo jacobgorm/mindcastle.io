@@ -60,6 +60,17 @@ typedef struct UserData {
     chunk_id_t chunk_ids[0];
 } UserData;
 
+static inline void set_chunk_id(UserData *ud, int chunk, chunk_id_t chunk_id)
+{
+    assert(chunk >= 0);
+    ud->chunk_ids[chunk] = chunk_id;
+}
+
+static inline chunk_id_t get_chunk_id(const UserData *ud, int chunk)
+{
+    return ud->chunk_ids[chunk];
+}
+
 static inline size_t ud_size(const UserData *cud, size_t n)
 {
     return sizeof(*cud) + sizeof(cud->chunk_ids[0]) * n;
@@ -162,7 +173,7 @@ int dubtree_init(DubTree *t, const uint8_t *key,
                     next.level_hash);
             const UserData *cud = simpletree_get_user(&st);
             for (int j = 0; j < cud->num_chunks; ++j) {
-                chunk_ref(t, cud->chunk_ids[j]);
+                chunk_ref(t, get_chunk_id(cud, j));
             }
             next = cud->next;
             simpletree_close(&st);
@@ -885,7 +896,7 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
                      * did not have one already. */
                     if (!versions[idx]) {
                         versions[idx] = 1;
-                        sources[idx].chunk_id = cud->chunk_ids[k.value.chunk];
+                        sources[idx].chunk_id = get_chunk_id(cud, k.value.chunk);
                         sources[idx].offset = k.value.offset;
                         sources[idx].size = k.value.size;
                         sources[idx].hash = k.value.hash;
@@ -1420,8 +1431,8 @@ static inline void __free_chunk(DubTree *t, chunk_id_t chunk_id)
     }
 }
 
-int write_chunk(DubTree *t, chunk_id_t *out_id, Chunk *c,
-        const uint8_t *chunk0, uint32_t size)
+chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
+        uint32_t size)
 {
     /* If copying everything in a chunk, we can just return its id. */
     int i, j;
@@ -1441,6 +1452,7 @@ int write_chunk(DubTree *t, chunk_id_t *out_id, Chunk *c,
     //printf("%d vs %d, %u vs %u, %016lx\n", i, c->n_crs, first_chunk_id->size, total,
             //be64toh(first_chunk_id->id.first64));
     if (i == c->n_crs && first_chunk_id->size == total) {
+        chunk_id_t chunk_id = *first_chunk_id;
         for (j = 0; j < c->n_crs; ++j) {
             ChunkReads *cr = &c->crs[j];
             Read *first = cr->reads;
@@ -1450,12 +1462,12 @@ int write_chunk(DubTree *t, chunk_id_t *out_id, Chunk *c,
         free(c->crs);
         c->n_crs = 0;
         c->crs = NULL;
-        *out_id = *first_chunk_id;
-        return 0;
+        return chunk_id;
     }
 
 
     int l = -1;
+    chunk_id_t chunk_id = {};
     CallbackState *cs = calloc(1, sizeof(*cs));
     if (!cs) {
         errx(1, "%s: calloc failed", __FUNCTION__);
@@ -1512,19 +1524,19 @@ int write_chunk(DubTree *t, chunk_id_t *out_id, Chunk *c,
         err(1, "pipe read failed");
     }
     close(fds[0]);
-    *out_id = content_id(c->buf, size);
-    dubtree_handle_t f = get_chunk(t, *out_id, 1, 0, &l);
+    chunk_id = content_id(c->buf, size);
+    dubtree_handle_t f = get_chunk(t, chunk_id, 1, 0, &l);
     if (invalid_handle(f)) {
         if (errno == EEXIST) {
-            printf("not writing pre-existing chunk %"PRIx64"\n", be64toh(out_id->id.first64));
+            printf("not writing pre-existing chunk %"PRIx64"\n", be64toh(chunk_id.id.first64));
         } else {
-            err(1, "unable to write chunk %"PRIx64, be64toh(out_id->id.first64));
+            err(1, "unable to write chunk %"PRIx64, be64toh(chunk_id.id.first64));
             goto out;
         }
     } else {
         if (dubtree_pwrite(f, c->buf, size, 0) != size) {
             err(1, "%s: dubtree_pwrite to chunk %"PRIx64" failed",
-                    __FUNCTION__, be64toh(out_id->id.first64));
+                    __FUNCTION__, be64toh(chunk_id.id.first64));
         }
     }
     t->free_cb(t->opaque, c->buf);
@@ -1535,7 +1547,7 @@ out:
     if (l >= 0) {
         put_chunk(t, l);
     }
-    return 0;
+    return chunk_id;
 }
 
 
@@ -1708,7 +1720,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
             k = simpletree_read(existing, &min->it);
             min->key = k.key;
             min->chunk = k.value.chunk;
-            min->chunk_id = cud->chunk_ids[min->chunk];
+            min->chunk_id = get_chunk_id(cud, min->chunk);
             min->offset = k.value.offset;
             min->size = k.value.size;
             min->hash = k.value.hash;
@@ -1753,6 +1765,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
 
     int done;
     Chunk *out = NULL;
+    chunk_id_t out_id = {};
     int out_chunk = -1;
     int *deref = NULL;
     
@@ -1773,7 +1786,8 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         /* Anything to flush from current chunk before we switch to another one? */
         if (t_buffered && (done || chunk_exceeded(t_hash, t_buffered))) {
 
-            write_chunk(t, &ud->chunk_ids[out_chunk], out, encrypted_values, t_buffered);
+            out_id = write_chunk(t, out, encrypted_values, t_buffered);
+            set_chunk_id(ud, out_chunk, out_id);
             out_chunk = -1;
             out = NULL;
             t_buffered = 0;
@@ -1796,7 +1810,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
                 if (chunk < 0) {
                     chunk = add_chunk_id(&ud);
                     deref[min->chunk] = chunk;
-                    ud->chunk_ids[chunk] = old_ud->chunk_ids[min->chunk];
+                    set_chunk_id(ud, chunk, get_chunk_id(old_ud, min->chunk));
                 }
                 insert_kv(&st, min->key, chunk, min->offset, min->size, min->hash);
             } else {
@@ -1840,7 +1854,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
                 k = simpletree_read(min->st, &min->it);
                 min->key = k.key;
                 min->chunk = k.value.chunk;
-                min->chunk_id = cud->chunk_ids[min->chunk];
+                min->chunk_id = get_chunk_id(cud, min->chunk);
                 min->offset = k.value.offset;
                 min->size = k.value.size;
                 min->hash = k.value.hash;
@@ -1867,7 +1881,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     simpletree_finish(&st);
 
     for (int k = 0; k < ud->num_chunks; ++k) {
-        chunk_ref(t, ud->chunk_ids[k]);
+        chunk_ref(t, get_chunk_id(ud, k));
     }
 
     ud->level = dest;
@@ -1905,7 +1919,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         if (st) {
             cud = simpletree_get_user(st);
             for (int k = 0; k < cud->num_chunks; ++k) {
-                chunk_id_t chunk_id = cud->chunk_ids[k];
+                chunk_id_t chunk_id = get_chunk_id(cud, k);
                 if (chunk_deref(t, chunk_id) == 0) {
                     __free_chunk(t, chunk_id);
                 }
@@ -2021,7 +2035,7 @@ int dubtree_sanity_check(DubTree *t)
             k = simpletree_read(&st, &it);
             if (idx != k.value.chunk) {
                 idx = k.value.chunk;
-                chunk_id = cud->chunk_ids[k.value.chunk];
+                chunk_id = get_chunk_id(cud, k.value.chunk);
             }
             cf = get_chunk(t, chunk_id, 0, 1, &l);
             if (invalid_handle(cf)) {
