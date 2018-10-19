@@ -1256,7 +1256,7 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
     if (hashtable_find(&t->ht, chunk_id.id.first64, &line)) {
         cl = lru_cache_touch_line(&t->lru, line);
         if (dirty && !cl->dirty) {
-            errx(1, "%"PRIx64":%u was previously opened non-dirty!\n",
+            printf("%"PRIx64":%u was previously opened non-dirty!\n",
                     be64toh(chunk_id.id.first64), chunk_id.size);
             errno = EEXIST;
             return DUBTREE_INVALID_HANDLE;
