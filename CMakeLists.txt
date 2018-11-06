@@ -15,7 +15,7 @@ include_directories(
     "${CMAKE_SOURCE_DIR}"
 )
 
-add_library(swap SHARED
+add_library(swap
     block-swap.c
     aio.c
     ioh.c
