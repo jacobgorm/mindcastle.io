@@ -8,10 +8,12 @@ somewhere, for instance on S3 or Google Storage. It supports fetching remote
 objects on demand, but currently you have to push them to the cloud or your own
 HTTP server, e.g, using a tool like rclone or rsync. The block devices operates
 over a compressed and encrypted database-like structure, somewhat similar to
-LevelDB or RocksDB, but optimized for block storage. The code is forked from
+LevelDB or RocksDB, but optimized for block storage. The code was forked from
 Bromium's internal ".swap" storage engine, which is the storage component of
 that company's ground-breaking micro-virtualization security technology, and
-has (anecdotally) been used to launch more VMs than Amazon AWS.
+has (anecdotally) been used to launch more VMs than Amazon AWS. Today, development
+is sponsored by Vertigo.ai, and the main developer is Jacob Gorm Hansen, who also
+led the work at Bromium.
 
 ## Building
 
