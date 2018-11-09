@@ -24,8 +24,8 @@ To build on debian/ubuntu, you need to install:
 * uuid-dev
 * libssl-dev
 
-And to run well you should have the "haveged" entropy gathering service
-installed and running.
+And to run well you should have an entropy gathering service like rng-tools
+or haveged installed and running.
 
 Then you can build with:
 
