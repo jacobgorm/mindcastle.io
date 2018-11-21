@@ -29,6 +29,9 @@ To build on debian/ubuntu, you need to install:
 And to run well you should have an entropy gathering service like rng-tools
 or haveged installed and running.
 
+To run with the example scripts you also need to install:
+* xfsprogs
+
 Then you can build with:
 
 ```bash
