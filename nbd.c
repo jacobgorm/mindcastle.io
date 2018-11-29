@@ -77,6 +77,8 @@ static inline int safe_read(int fd, void *buf, size_t sz)
         } while (r < 0 && errno == EINTR);
         if (r < 0) {
             err(1, "nbd read failed");
+        } else if (r == 0) {
+            break;
         }
         left -= r;
         b += r;
@@ -95,6 +97,8 @@ static inline int safe_write(int fd, const void *buf, size_t sz)
         } while (r < 0 && errno == EINTR);
         if (r < 0) {
             err(1, "nbd write failed");
+        } else if (r == 0) {
+            break;
         }
         left -= r;
         b += r;
