@@ -361,6 +361,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "failed to init nbd, exiting!\n");
         exit(1);
     }
+    printf("configuring device using %s\n", script);
 
     struct client_info *ci = malloc(sizeof(struct client_info));
     ci->sock = sp[0];
