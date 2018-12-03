@@ -1419,8 +1419,8 @@ static inline void __free_chunk(DubTree *t, chunk_id_t chunk_id)
     }
 }
 
-chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
-        uint32_t size)
+void write_chunk(DubTree *t, chunk_id_t *out_id, Chunk *c,
+        const uint8_t *chunk0, uint32_t size)
 {
     /* If copying everything in a chunk, we can just return its id. */
     int i, j;
@@ -1440,22 +1440,22 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
     //printf("%d vs %d, %u vs %u, %016lx\n", i, c->n_crs, first_chunk_id->size, total,
             //be64toh(first_chunk_id->id.first64));
     if (i == c->n_crs && first_chunk_id->size == total) {
-        chunk_id_t chunk_id = *first_chunk_id;
         for (j = 0; j < c->n_crs; ++j) {
             ChunkReads *cr = &c->crs[j];
             Read *first = cr->reads;
             free(first);
         }
+        *out_id = *first_chunk_id;
+
         hashtable_clear(&c->ht);
         free(c->crs);
         c->n_crs = 0;
         c->crs = NULL;
-        return chunk_id;
+        return;
     }
 
 
     int l = -1;
-    chunk_id_t chunk_id = {};
     CallbackState *cs = calloc(1, sizeof(*cs));
     if (!cs) {
         errx(1, "%s: calloc failed", __FUNCTION__);
@@ -1512,19 +1512,19 @@ chunk_id_t write_chunk(DubTree *t, Chunk *c, const uint8_t *chunk0,
         err(1, "pipe read failed");
     }
     close(fds[0]);
-    chunk_id = content_id(c->buf, size);
-    dubtree_handle_t f = get_chunk(t, chunk_id, 1, 0, &l);
+    *out_id = content_id(c->buf, size);
+    dubtree_handle_t f = get_chunk(t, *out_id, 1, 0, &l);
     if (invalid_handle(f)) {
         if (errno == EEXIST) {
-            printf("not writing pre-existing chunk %"PRIx64"\n", be64toh(chunk_id.id.first64));
+            printf("not writing pre-existing chunk %"PRIx64"\n", be64toh(out_id->id.first64));
         } else {
-            err(1, "unable to write chunk %"PRIx64, be64toh(chunk_id.id.first64));
+            err(1, "unable to write chunk %"PRIx64, be64toh(out_id->id.first64));
             goto out;
         }
     } else {
         if (dubtree_pwrite(f, c->buf, size, 0) != size) {
             err(1, "%s: dubtree_pwrite to chunk %"PRIx64" failed",
-                    __FUNCTION__, be64toh(chunk_id.id.first64));
+                    __FUNCTION__, be64toh(out_id->id.first64));
         }
     }
     t->free_cb(t->opaque, c->buf);
@@ -1535,7 +1535,6 @@ out:
     if (l >= 0) {
         put_chunk(t, l);
     }
-    return chunk_id;
 }
 
 
@@ -1773,7 +1772,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         /* Anything to flush from current chunk before we switch to another one? */
         if (t_buffered && (done || chunk_exceeded(t_hash, t_buffered))) {
 
-            ud->chunk_ids[out_chunk] = write_chunk(t, out, encrypted_values, t_buffered);
+            write_chunk(t, &ud->chunk_ids[out_chunk], out, encrypted_values, t_buffered);
             out_chunk = -1;
             out = NULL;
             t_buffered = 0;
