@@ -60,17 +60,6 @@ typedef struct UserData {
     chunk_id_t chunk_ids[0];
 } UserData;
 
-static inline void set_chunk_id(UserData *ud, int chunk, chunk_id_t chunk_id)
-{
-    assert(chunk >= 0);
-    ud->chunk_ids[chunk] = chunk_id;
-}
-
-static inline chunk_id_t get_chunk_id(const UserData *ud, int chunk)
-{
-    return ud->chunk_ids[chunk];
-}
-
 static inline size_t ud_size(const UserData *cud, size_t n)
 {
     return sizeof(*cud) + sizeof(cud->chunk_ids[0]) * n;
@@ -173,7 +162,7 @@ int dubtree_init(DubTree *t, const uint8_t *key,
                     next.level_hash);
             const UserData *cud = simpletree_get_user(&st);
             for (int j = 0; j < cud->num_chunks; ++j) {
-                chunk_ref(t, get_chunk_id(cud, j));
+                chunk_ref(t, cud->chunk_ids[j]);
             }
             next = cud->next;
             simpletree_close(&st);
@@ -896,7 +885,7 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
                      * did not have one already. */
                     if (!versions[idx]) {
                         versions[idx] = 1;
-                        sources[idx].chunk_id = get_chunk_id(cud, k.value.chunk);
+                        sources[idx].chunk_id = cud->chunk_ids[k.value.chunk];
                         sources[idx].offset = k.value.offset;
                         sources[idx].size = k.value.size;
                         sources[idx].hash = k.value.hash;
@@ -1719,7 +1708,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
             k = simpletree_read(existing, &min->it);
             min->key = k.key;
             min->chunk = k.value.chunk;
-            min->chunk_id = get_chunk_id(cud, min->chunk);
+            min->chunk_id = cud->chunk_ids[min->chunk];
             min->offset = k.value.offset;
             min->size = k.value.size;
             min->hash = k.value.hash;
@@ -1764,7 +1753,6 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
 
     int done;
     Chunk *out = NULL;
-    chunk_id_t out_id = {};
     int out_chunk = -1;
     int *deref = NULL;
     
@@ -1785,8 +1773,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         /* Anything to flush from current chunk before we switch to another one? */
         if (t_buffered && (done || chunk_exceeded(t_hash, t_buffered))) {
 
-            out_id = write_chunk(t, out, encrypted_values, t_buffered);
-            set_chunk_id(ud, out_chunk, out_id);
+            ud->chunk_ids[out_chunk] = write_chunk(t, out, encrypted_values, t_buffered);
             out_chunk = -1;
             out = NULL;
             t_buffered = 0;
@@ -1809,7 +1796,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
                 if (chunk < 0) {
                     chunk = add_chunk_id(&ud);
                     deref[min->chunk] = chunk;
-                    set_chunk_id(ud, chunk, get_chunk_id(old_ud, min->chunk));
+                    ud->chunk_ids[chunk] = old_ud->chunk_ids[min->chunk];
                 }
                 insert_kv(&st, min->key, chunk, min->offset, min->size, min->hash);
             } else {
@@ -1853,7 +1840,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
                 k = simpletree_read(min->st, &min->it);
                 min->key = k.key;
                 min->chunk = k.value.chunk;
-                min->chunk_id = get_chunk_id(cud, min->chunk);
+                min->chunk_id = cud->chunk_ids[min->chunk];
                 min->offset = k.value.offset;
                 min->size = k.value.size;
                 min->hash = k.value.hash;
@@ -1880,7 +1867,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     simpletree_finish(&st);
 
     for (int k = 0; k < ud->num_chunks; ++k) {
-        chunk_ref(t, get_chunk_id(ud, k));
+        chunk_ref(t, ud->chunk_ids[k]);
     }
 
     ud->level = dest;
@@ -1918,7 +1905,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         if (st) {
             cud = simpletree_get_user(st);
             for (int k = 0; k < cud->num_chunks; ++k) {
-                chunk_id_t chunk_id = get_chunk_id(cud, k);
+                chunk_id_t chunk_id = cud->chunk_ids[k];
                 if (chunk_deref(t, chunk_id) == 0) {
                     __free_chunk(t, chunk_id);
                 }
@@ -2034,7 +2021,7 @@ int dubtree_sanity_check(DubTree *t)
             k = simpletree_read(&st, &it);
             if (idx != k.value.chunk) {
                 idx = k.value.chunk;
-                chunk_id = get_chunk_id(cud, k.value.chunk);
+                chunk_id = cud->chunk_ids[k.value.chunk];
             }
             cf = get_chunk(t, chunk_id, 0, 1, &l);
             if (invalid_handle(cf)) {
