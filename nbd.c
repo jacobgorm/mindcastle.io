@@ -26,6 +26,8 @@
 
 extern void dump_swapstat(void);
 
+static FILE *tracefile = NULL;
+
 struct sock_info {
     int sock;
 };
@@ -172,6 +174,9 @@ static void got_data(void *opaque)
                 ri->len = len;
                 ri->reply = reply;
 
+                if (tracefile) {
+                    fprintf(tracefile, "%lx %x\n", offset / 512, len / 512);
+                }
                 swap_aio_read(ci->bs, offset / 512, ri->buffer, len / 512, nbd_read_done, ri);
                 break;
             }
@@ -236,11 +241,21 @@ void signal_handler(int s)
 int main(int argc, char **argv)
 {
     int r;
-    if (argc != 3) {
-        fprintf(stderr, "Usage: %s [filename.swap] [statechange-script]\n", argv[0]);
+    if (argc < 3) {
+        fprintf(stderr, "Ussage: %s [filename.swap] [statechange-script]\n", argv[0]);
         exit(1);
     }
-    char *script = argv[2];
+
+    --argc;
+    ++argv;
+
+    if (argc >= 4 && !strcmp(argv[0], "-t")) {
+        printf("writing read-trace to %s\n", argv[1]);
+        tracefile = fopen(argv[1], "wb");
+        argc -= 2;
+        argv += 2;
+    }
+    char *script = argv[1];
 
     shell("/sbin/modprobe", "nbd", NULL);
 
@@ -249,7 +264,7 @@ int main(int argc, char **argv)
         err(1, "mlockall failed");
     }
 
-    char *fn = argv[1];
+    char *fn = argv[0];
     struct sigaction sig;
     sig.sa_handler = signal_handler;
     sigemptyset(&sig.sa_mask);
@@ -268,7 +283,7 @@ int main(int argc, char **argv)
         }
     }
 
-    printf("opening swapimage...\n");
+    printf("opening swapimage %s...\n", fn);
     ioh_init();
     swap_aio_init();
 
