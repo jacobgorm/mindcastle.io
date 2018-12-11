@@ -80,6 +80,16 @@ void simpletree_close(SimpleTree *st)
     }
 }
 
+static inline int user_fits_inline(size_t size) {
+    return (size <= (SIMPLETREE_NODESIZE - (CRYPTO_IV_SIZE + sizeof(SimpleTreeMetaNode))));
+}
+
+static inline size_t user_num_nodes(size_t size) {
+    SimpleTreeUserNode *un = NULL;
+    const size_t nsz = sizeof(un->data);
+    return (size + nsz - 1) / nsz;
+}
+
 void simpletree_open(SimpleTree *st, Crypto *crypto, int fd, hash_t hash)
 {
     assert(hash.first64);
@@ -102,15 +112,15 @@ void simpletree_open(SimpleTree *st, Crypto *crypto, int fd, hash_t hash)
     }
 
     st->user_data = malloc(meta->user_size);
-    if (meta->user_size <= (SIMPLETREE_NODESIZE - (CRYPTO_IV_SIZE + sizeof(*meta)))) {
+    if (user_fits_inline(meta->user_size)) {
         memcpy(st->user_data, (uint8_t *) meta + sizeof(*meta), meta->user_size);
     } else {
-        node_t n = meta->num_nodes - (meta->user_size + SIMPLETREE_NODESIZE -
-                1) / SIMPLETREE_NODESIZE;
-        int take;
-        int left;
+        node_t n = meta->num_nodes - user_num_nodes(meta->user_size);
+        size_t take;
+        size_t left;
         uint8_t *out = st->user_data;
         hash_t user_hash = meta->first_user_hash;
+        assert(n < meta->num_nodes);
         for (left = meta->user_size; left > 0; left -= take, ++n, out += take) {
             const SimpleTreeUserNode *un = &get_node_hash(st, n, user_hash)->u.un;
             user_hash = un->next_hash;
@@ -147,6 +157,7 @@ static int buffer_node(SimpleTree *st, node_t n)
         if (r < 0) {
             err(1, "unable to read node %u", n);
         }
+        assert(r != 0);
         left -= r;
         offset += r;
     }
@@ -357,9 +368,8 @@ static hash_t encrypt_node(SimpleTree *st, node_t n, hash_t next_hash)
         hash_t nil = {};
         meta->root_hash = encrypt_node(st, meta->root, nil);
         meta->first_child_hash = st->first_child_hash;
-        if (meta->user_size > (SIMPLETREE_NODESIZE - sizeof(*meta))) {
-            node_t first = meta->num_nodes - (meta->user_size + SIMPLETREE_NODESIZE -
-                    1) / SIMPLETREE_NODESIZE;
+        if (!user_fits_inline(meta->user_size)) {
+            node_t first = meta->num_nodes - user_num_nodes(meta->user_size);
             node_t n = meta->num_nodes - 1;
             hash_t user_hash = {};
             for (; n >= first; --n) {

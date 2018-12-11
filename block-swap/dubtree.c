@@ -557,6 +557,7 @@ static int execute_reads(DubTree *t,
         if (r < 0) {
             err(1, "preadv failed f=%d r %d", f->fd, r);
         }
+        assert(r >= 0);
     }
 #endif
     free(first);
