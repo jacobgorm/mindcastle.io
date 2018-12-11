@@ -1517,7 +1517,8 @@ void write_chunk(DubTree *t, chunk_id_t *out_id, Chunk *c,
     dubtree_handle_t f = get_chunk(t, *out_id, 1, 0, &l);
     if (invalid_handle(f)) {
         if (errno == EEXIST) {
-            printf("not writing pre-existing chunk %"PRIx64"\n", be64toh(out_id->id.first64));
+            fprintf(stderr, "not writing pre-existing chunk %"PRIx64"\n",
+                    be64toh(out_id->id.first64));
         } else {
             err(1, "unable to write chunk %"PRIx64, be64toh(out_id->id.first64));
             goto out;
