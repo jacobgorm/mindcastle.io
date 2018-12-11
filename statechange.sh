@@ -19,7 +19,7 @@ create)
     ;;
 
 open)
-    (mkdir -p $MNT && mount $DEVICE $MNT) || (rm -rf $MNT; kill -2 $PID)
+    (mkdir -p $MNT && mount -osync $DEVICE $MNT) || (rm -rf $MNT; kill -2 $PID)
     ;;
 
 close)
