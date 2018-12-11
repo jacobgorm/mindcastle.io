@@ -144,7 +144,7 @@ static inline void dubtree_close_file(dubtree_handle_t f)
 }
 
 static inline
-int dubtree_pread(dubtree_handle_t f, void *buf, size_t sz, uint64_t offset)
+ssize_t dubtree_pread(dubtree_handle_t f, void *buf, size_t sz, uint64_t offset)
 {
 #ifdef _WIN32
     OVERLAPPED o = {};
@@ -168,24 +168,26 @@ int dubtree_pread(dubtree_handle_t f, void *buf, size_t sz, uint64_t offset)
 #else
 
     uint8_t *b = buf;
-    int left = sz;
+    size_t left = sz;
+    ssize_t got = 0;
     while (left) {
         ssize_t r;
         do {
             r = pread(f->fd, b, left, offset);
         } while (r < 0 && errno == EINTR);
-        if (r < 0) {
+        if (r <= 0) {
             err(1, "pread %p+%lx failed", b, offset);
         }
         left -= r;
         b += r;
         offset += r;
+        got += r;
     }
     return sz;
 #endif
 }
 
-static inline int
+static inline ssize_t
 dubtree_pwrite(dubtree_handle_t f, const void *buf, size_t sz, uint64_t offset)
 {
 #ifdef _WIN32
@@ -210,20 +212,21 @@ dubtree_pwrite(dubtree_handle_t f, const void *buf, size_t sz, uint64_t offset)
 #else
 
     const uint8_t *b = buf;
-    int left = sz;
+    size_t left = sz;
+    ssize_t wrote = 0;
     while (left) {
         ssize_t r;
         do {
             r = pwrite(f->fd, b + offset, left, offset);
         } while (r < 0 && errno == EINTR);
-        if (r < 0) {
+        if (r <= 0) {
             return r;
         }
         left -= r;
         offset += r;
+        wrote += r;
     }
-    return sz;
-
+    return wrote;
 #endif
 }
 

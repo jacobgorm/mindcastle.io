@@ -495,8 +495,8 @@ void simpletree_set_user(SimpleTree *st, const void *data, size_t size)
     if (size <= (SIMPLETREE_NODESIZE - (CRYPTO_IV_SIZE + sizeof(*meta)))) {
         memcpy((uint8_t *) meta + sizeof(*meta), data, size);
     } else {
-        int take;
-        int left;
+        size_t take;
+        size_t left;
         const uint8_t *in = data;
         for (left = size; left > 0; in += take, left -= take) {
             node_t n = create_user_node(st);

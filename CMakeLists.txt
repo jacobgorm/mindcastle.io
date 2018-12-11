@@ -4,7 +4,7 @@ project("oneroot" C)
 find_package(CURL)
 find_package(OpenSSL)
 
-set(CMAKE_C_FLAGS "-Wall -Werror -Ofast -Wfatal-errors -Wno-unused-result -g")
+set(CMAKE_C_FLAGS "-Wall -Werror -Ofast -Wfatal-errors -Wno-unused-result -D_POSIX_C_SOURCE=200809L -g")
 
 #set (SANITIZE 1)
 if (SANITIZE)
