@@ -5,6 +5,8 @@ find_package(CURL)
 find_package(OpenSSL)
 
 set(CMAKE_C_FLAGS "-Wall -Werror -Ofast -Wfatal-errors -Wno-unused-result -D_POSIX_C_SOURCE=200809L -g")
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 
 #set (SANITIZE 1)
 if (SANITIZE)
@@ -17,6 +19,16 @@ include_directories(
 
 add_library(swap
     block-swap.c
+    aio.c
+    ioh.c
+    block-swap/crypto.c
+    block-swap/dubtree.c
+    block-swap/hashtable.c
+    block-swap/simpletree.c
+    )
+
+add_library(kv
+    kv.c
     aio.c
     ioh.c
     block-swap/crypto.c
@@ -42,3 +54,23 @@ add_executable(img-heat img-heat.c mt19937-64.c)
 target_link_libraries(img-heat swap -lpthread -llz4 -luuid ${OPENSSL_LIBRARIES} ${CURL_LIBRARIES})
 
 install(TARGETS oneroot img-fsck img-test DESTINATION bin)
+
+find_package(PythonInterp 3.5 REQUIRED)
+find_package(PythonLibs 3.5 REQUIRED)
+
+add_library(pykv SHARED pykv.c)
+set_target_properties(
+    pykv
+    PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME pykv
+        LINKER_LANGUAGE C
+)
+target_include_directories(pykv PUBLIC
+    ${PYTHON_INCLUDE_DIRS}
+    ${NUMPY_INCLUDE_DIR}
+    ${PROJECT_SOURCE_DIR}/src/headers
+    )
+target_link_libraries(pykv
+    ${PYTHON_LIBRARIES}
+    kv -lpthread -llz4 -luuid ${OPENSSL_LIBRARIES} ${CURL_LIBRARIES})

@@ -43,7 +43,7 @@ static void wait(void) {
 static void *disk_swap_thread(void *bs)
 {
     for (;;) {
-        swap_aio_wait();
+        aio_wait();
     }
     return NULL;
 }
@@ -67,7 +67,7 @@ int main(int argc, char **argv)
     }
 
     ioh_init();
-    swap_aio_init();
+    aio_init();
 
     const char *dst = argv[1];
     const char *trace = argv[2];

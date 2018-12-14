@@ -32,6 +32,8 @@
 #define CURL_MAX_READ_SIZE (1<<19)
 #endif
 
+#define DUBTREE_VALUE_SIZE (0xffff)
+
 static dubtree_handle_t prepare_http_get(DubTree *t,
         int synchronous, const char *url, chunk_id_t chunk_id);
 
@@ -305,7 +307,7 @@ static void decrypt_read(void *opaque, int result)
         for (int i = 0; i < ds->num_keys; ++i, hash += CRYPTO_TAG_SIZE) {
             uint32_t size = ds->sizes[i];
             if (size > 0) {
-                uint8_t tmp[DUBTREE_BLOCK_SIZE];
+                uint8_t tmp[DUBTREE_VALUE_SIZE];
                 int dsize = decrypt256(ds->crypto, tmp, src + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE, hash, src);
                 if (dsize <= 0) {
                     errx(1, "failed decrypting read");
@@ -424,6 +426,7 @@ static void prep_curl_handle(CURL *ch, const char *url, const char *ranges,
     curl_easy_setopt(ch, CURLOPT_PRIVATE, opaque);
     curl_easy_setopt(ch, CURLOPT_SOCKOPTFUNCTION, curl_sockopt_cb);
     curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, curl_data_cb);
+
     if (ranges) {
         curl_easy_setopt(ch, CURLOPT_RANGE, ranges);
     }
@@ -462,7 +465,7 @@ static int execute_reads(DubTree *t,
                     char ranges[32];
                     sprintf(ranges, "%u-%u", first->src_offset, hgs->chunk_id.size - 1);
                     prep_curl_handle(ch, hgs->url, ranges, hgs_ref(hgs));
-                    swap_aio_add_curl_handle(ch);
+                    aio_add_curl_handle(ch);
                     hgs->split = hgs->offset = first->src_offset;
                     hgs->active = 1;
                 }
@@ -819,14 +822,18 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
     succeeded = 1; // so far so good.
 
     /* Initialize result vectors. */
-    memcpy(versions, map, sizeof(versions[0]) * num_keys);
+    if (map) {
+        memcpy(versions, map, sizeof(versions[0]) * num_keys);
+    } else {
+        memset(versions, 0, sizeof(versions[0]) * num_keys);
+    }
     memset(sizes, 0, sizeof(sizes[0]) * num_keys);
 
     /* How many keys do we actually need to get? Some may have been
      * filled out already by the caller so do not count those. */
 
     for (i = missing = 0; i < num_keys; ++i) {
-        if (map[i] == 0) ++missing;
+        if (!map || map[i] == 0) ++missing;
     }
 
     /* Open all the trees. */
@@ -928,7 +935,7 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
     r = succeeded ? missing : -EAGAIN;
     /* Since versions array started out as a copy of map, it is safe to
      * copy it back wholesale. */
-    if (succeeded) {
+    if (succeeded && map) {
         memcpy(map, versions, sizeof(map[0]) * num_keys);
     }
 
@@ -1106,6 +1113,7 @@ static chunk_id_t content_id(const uint8_t *in, int size)
 
 static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
 {
+    //printf("%s %lu\n", __FUNCTION__, (int) size *nmemb);
     int done = 0;
     int r;
     HttpGetState *hgs = opaque;
@@ -1120,7 +1128,7 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
             char ranges[32];
             sprintf(ranges, "0-%u", hgs->split - 1);
             prep_curl_handle(ch, hgs->url, ranges, hgs_ref(hgs));
-            swap_aio_add_curl_handle(ch);
+            aio_add_curl_handle(ch);
         } else {
             fprintf(stderr, "%s %.2fMiB/s\n", hgs->url, (double) (hgs->size) / (1024.0 * 1024.0 * (rtc() - hgs->t0)));
             void *b = hgs->buffer;
@@ -1931,7 +1939,6 @@ int dubtree_delete(DubTree *t)
     Crypto crypto;
     crypto_init(&crypto, t->crypto_key);
 
-    critical_section_enter(&t->cache_lock);
     struct level_ptr next = t->first;
     while (next.level >= 0) {
 
@@ -1949,7 +1956,6 @@ int dubtree_delete(DubTree *t)
         simpletree_close(&st);
         __free_chunk(t, chunk_id);
     }
-    critical_section_leave(&t->cache_lock);
     crypto_close(&crypto);
     char *dn;
     dn = strdup(t->fallbacks[0]);
@@ -2013,8 +2019,7 @@ int dubtree_sanity_check(DubTree *t)
         int idx = -1;
         while (!simpletree_at_end(&st, &it)) {
             SimpleTreeResult k;
-            uint8_t in[2 * DUBTREE_BLOCK_SIZE];
-            //uint8_t out[DUBTREE_BLOCK_SIZE];
+            uint8_t in[2 * DUBTREE_VALUE_SIZE];
             chunk_id_t chunk_id;
             int l;
             int got;
@@ -2036,7 +2041,7 @@ int dubtree_sanity_check(DubTree *t)
             put_chunk(t, l);
 
             int sz = k.value.size;
-            if (sz < DUBTREE_BLOCK_SIZE) {
+            if (sz < DUBTREE_VALUE_SIZE) {
 #if 0
                 int unsz = LZ4_decompress_safe((const char*)in, (char*)out,
                         sz, DUBTREE_BLOCK_SIZE);
