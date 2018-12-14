@@ -34,7 +34,7 @@ int main(int argc, char **argv)
     }
 
     ioh_init();
-    swap_aio_init();
+    aio_init();
 
     const char *dst = argv[1];
     int r;

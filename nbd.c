@@ -127,7 +127,7 @@ static void nbd_read_done(void *opaque, int ret) {
     free(ri->buffer);
     free(ri);
 
-    swap_aio_add_wait_object(ci->sock, got_data, ci);
+    aio_add_wait_object(ci->sock, got_data, ci);
 }
 
 static void nbd_write_done(void *opaque, int ret) {
@@ -196,7 +196,7 @@ static void got_data(void *opaque)
                     }
                 }
                 swap_aio_write(ci->bs, offset / 512, buffer, len / 512, nbd_write_done, buffer);
-                swap_aio_add_wait_object(ci->sock, got_data, ci);
+                aio_add_wait_object(ci->sock, got_data, ci);
 
                 break;
             }
@@ -208,7 +208,7 @@ static void got_data(void *opaque)
                 uint64_t offset = be64toh(request.from);
                 uint8_t *zero = calloc(1, len);
                 swap_aio_write(ci->bs, offset / 512, zero, len / 512, nbd_write_done, zero);
-                swap_aio_add_wait_object(ci->sock, got_data, ci);
+                aio_add_wait_object(ci->sock, got_data, ci);
                 break;
             }
 
@@ -218,23 +218,31 @@ static void got_data(void *opaque)
                 if (r != sizeof(reply)) {
                     err(1, "sock write (d) failed");
                 }
-                swap_aio_add_wait_object(ci->sock, got_data, ci);
+                aio_add_wait_object(ci->sock, got_data, ci);
                 break;
             }
         };
     }
 }
 
-volatile int should_exit = 0;
-volatile int should_close = 0;
+static int should_exit = 0;
+static int should_close = 0;
 static BlockDriverState bs;
+static ioh_event exit_event;
+static ioh_event close_event;
+
+void close_event_cb(void *opaque)
+{
+    int *pi = opaque;
+    *pi = 1;
+}
 
 void signal_handler(int s)
 {
     if (s == SIGINT) {
-        should_exit = 1;
+        ioh_event_set(&exit_event);
     } else if (s == SIGHUP) {
-        should_close = 1;
+        ioh_event_set(&close_event);
     }
 }
 
@@ -285,7 +293,7 @@ int main(int argc, char **argv)
 
     printf("opening swapimage %s...\n", fn);
     ioh_init();
-    swap_aio_init();
+    aio_init();
 
     int needs_format = 0;
     if (!file_exists(fn)) {
@@ -385,7 +393,7 @@ int main(int argc, char **argv)
     struct client_info *ci = malloc(sizeof(struct client_info));
     ci->sock = sp[0];
     ci->bs = &bs;
-    swap_aio_add_wait_object(ci->sock, got_data, ci);
+    aio_add_wait_object(ci->sock, got_data, ci);
 
     uuid_t uuid;
     swap_ioctl(&bs, 0, uuid);
@@ -405,8 +413,10 @@ int main(int argc, char **argv)
         shell(script, "open", NULL);
     }
 
+    ioh_event_init(&close_event, &close_event_cb, &should_close);
+    ioh_event_init(&exit_event, &close_event_cb, &should_exit);
     while (!should_exit) {
-        swap_aio_wait();
+        aio_wait();
         if (should_close) {
             shell(script, "close", NULL);
             should_close = 0;
@@ -420,6 +430,6 @@ int main(int argc, char **argv)
     swap_flush(&bs);
     dump_swapstat();
     swap_close(&bs);
-    swap_aio_close();
+    aio_close();
     return 0;
 }
