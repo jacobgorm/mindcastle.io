@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <err.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,7 +86,7 @@ int swap_aio_wait(void)
             curl_easy_getinfo(msg->easy_handle, CURLINFO_RESPONSE_CODE,
                     &response);
             if (response != 200 && response != 206) {
-                printf("got response %u\n", response);
+                errx(1, "got HTTP response %u\n", response);
             }
             curl_multi_remove_handle(cmh, msg->easy_handle);
             dubtree_cleanup_curl_handle(msg->easy_handle);
