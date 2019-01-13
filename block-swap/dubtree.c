@@ -424,6 +424,7 @@ static void prep_curl_handle(CURL *ch, const char *url, const char *ranges,
     curl_easy_setopt(ch, CURLOPT_PRIVATE, opaque);
     curl_easy_setopt(ch, CURLOPT_SOCKOPTFUNCTION, curl_sockopt_cb);
     curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, curl_data_cb);
+    curl_easy_setopt(ch, CURLOPT_TIMEOUT, 60L);
     if (ranges) {
         curl_easy_setopt(ch, CURLOPT_RANGE, ranges);
     }
