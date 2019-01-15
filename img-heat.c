@@ -66,8 +66,7 @@ int main(int argc, char **argv)
         exit(-1);
     }
 
-    ioh_init();
-    aio_init();
+    aio_global_init();
 
     const char *dst = argv[1];
     const char *trace = argv[2];

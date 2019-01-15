@@ -49,8 +49,7 @@ static void *kv_aio_thread(void *bs)
 }
 
 int kv_global_init(void) {
-    ioh_init();
-    aio_init();
+    aio_global_init();
     pthread_t tid;
     pthread_create(&tid, NULL, kv_aio_thread, NULL);
     return 0;
