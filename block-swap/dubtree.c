@@ -106,6 +106,10 @@ int dubtree_init(DubTree *t, const uint8_t *key,
     t->malloc_cb = malloc_cb;
     t->free_cb = free_cb;
     t->opaque = opaque;
+
+    t->head_ch = curl_easy_init();
+    t->shared_ch = curl_easy_init();
+
     critical_section_init(&t->cache_lock);
     critical_section_init(&t->write_lock);
 
@@ -1191,27 +1195,17 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
     return size * nmemb;
 }
 
-static CURL *head_ch = NULL;
-static CURL *shared_ch = NULL;
-
 static dubtree_handle_t prepare_http_get(DubTree *t,
         int synchronous, const char *url, chunk_id_t chunk_id)
 {
-    if (!head_ch) {
-        head_ch = curl_easy_init();
-    }
-    if (!shared_ch) {
-        shared_ch = curl_easy_init();
-    }
-
-    curl_easy_setopt(head_ch, CURLOPT_URL, url);
-    curl_easy_setopt(head_ch, CURLOPT_NOBODY, 1);
-    CURLcode r = curl_easy_perform(head_ch);
+    curl_easy_setopt(t->head_ch, CURLOPT_URL, url);
+    curl_easy_setopt(t->head_ch, CURLOPT_NOBODY, 1);
+    CURLcode r = curl_easy_perform(t->head_ch);
     if (r != CURLE_OK) {
         errx(1, "unable to HEAD %s, %s!", url, curl_easy_strerror(r));
     }
     int response;
-    curl_easy_getinfo(head_ch, CURLINFO_RESPONSE_CODE, &response);
+    curl_easy_getinfo(t->head_ch, CURLINFO_RESPONSE_CODE, &response);
     if (response != 200) {
         return DUBTREE_INVALID_HANDLE;
     }
@@ -1235,8 +1229,8 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
     f->opaque = hgs_ref(hgs);
 
     if (synchronous) {
-        prep_curl_handle(shared_ch, hgs->url, NULL, hgs_ref(hgs));
-        r = curl_easy_perform(shared_ch);
+        prep_curl_handle(t->shared_ch, hgs->url, NULL, hgs_ref(hgs));
+        r = curl_easy_perform(t->shared_ch);
         if (r != CURLE_OK) {
             errx(1, "unable to fetch %s, %s!", url, curl_easy_strerror(r));
         }
