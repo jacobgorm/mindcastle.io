@@ -73,18 +73,15 @@ static void aio_init_curl(struct curl_state *cs) {
     cs->max = -1;
 }
 
-void aio_init(void) {
+void aio_global_init(void) {
     for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
         AioEntry *e = &aios[i];
         memset(e, 0, sizeof(*e));
         e->fd = -1;
     }
+    ioh_init();
     curl_global_init(CURL_GLOBAL_DEFAULT);
     aio_init_curl(&curl_global);
-}
-
-void aio_close(void) {
-    //curl_multi_cleanup(cmh);
 }
 
 void aio_add_wait_object(int fd, void (*cb) (void *opaque), void *opaque) {

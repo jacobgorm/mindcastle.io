@@ -292,8 +292,7 @@ int main(int argc, char **argv)
     }
 
     printf("opening swapimage %s...\n", fn);
-    ioh_init();
-    aio_init();
+    aio_global_init();
 
     int needs_format = 0;
     if (!file_exists(fn)) {
@@ -430,6 +429,5 @@ int main(int argc, char **argv)
     swap_flush(&bs);
     dump_swapstat();
     swap_close(&bs);
-    aio_close();
     return 0;
 }
