@@ -73,6 +73,7 @@ typedef struct DubTree {
     malloc_callback malloc_cb;
     free_callback free_cb;
     void *opaque;
+    void *head_ch, *shared_ch;
 
 } DubTree;
 
