@@ -1853,39 +1853,3 @@ BlockDriver bdrv_swap = {
     .protocol_name = "swap",
 };
 #endif
-#if 0
-static void got_data(void *opaque)
-{
-    printf("got data\n");
-    struct client_info *ci = opaque;
-    char buffer[32] = {};
-    ssize_t r = read(ci->sock, buffer, sizeof(buffer));
-    printf("r %d %s\n", (int) r, strerror(errno));
-    if (r > 0) {
-        if (memcmp(buffer, "read\r\n", 6) == 0) {
-            printf("got read\n");
-        } else if (memcmp(buffer, "write\r\n", 7) == 0) {
-            printf("got write\n");
-        } else {
-            printf("got garbage `%s'\n", buffer);
-        }
-    }
-    aio_add_wait_object(&ci->event, got_data, ci);
-}
-
-static void got_client(void *opaque)
-{
-    struct sock_info *si = (struct sock_info *) opaque;
-    printf("got client on %d\n", si->sock);
-    struct client_info *ci = malloc(sizeof(struct client_info));
-    ci->sock = accept(si->sock, 0, 0);
-    assert(ci->sock >= 0);
-    int flag = 1;
-    int r = setsockopt(ci->sock, IPPROTO_TCP, TCP_NODELAY, (char *) &flag,
-            sizeof(int));
-    assert(r == 0);
-
-    ioh_event_init_fd(&ci->event, ci->sock);
-    aio_add_wait_object(&ci->event, got_data, ci);
-}
-#endif

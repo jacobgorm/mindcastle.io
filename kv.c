@@ -15,10 +15,6 @@
 #include "aio.h"
 #include "kv.h"
 
-static void kv_atexit(void) {
-    printf("%s\n", __FUNCTION__);
-}
-
 static void *kv_malloc(void *_s, size_t sz) {
     return malloc(sz);
 }
@@ -55,7 +51,6 @@ static void *kv_aio_thread(void *bs)
 int kv_global_init(void) {
     ioh_init();
     aio_init();
-    atexit(kv_atexit);
     pthread_t tid;
     pthread_create(&tid, NULL, kv_aio_thread, NULL);
     return 0;
