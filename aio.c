@@ -49,8 +49,8 @@ static inline void cs_put(struct curl_state **pcs) {
 
 static void curl_wakeup_cb(void *opaque) {
     struct curl_state *cs = cs_get(opaque);
-    curl_multi_socket_action(cs->cmh, CURL_SOCKET_TIMEOUT, 0, &cs->running);
     ioh_event_clear(&cs->curl_wakeup);
+    curl_multi_socket_action(cs->cmh, CURL_SOCKET_TIMEOUT, 0, &cs->running);
     cs_put(&cs);
 }
 
