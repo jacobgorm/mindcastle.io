@@ -72,14 +72,14 @@ int decrypt256(Crypto *crypto, uint8_t *plaintext, const uint8_t *ciphertext,
     int plaintext_len;
 
     if (EVP_DecryptInit_ex(ctx, cipher, NULL, crypto->key, iv) != 1) {
-        errx(1, "EVP_DecryptInit_ex failed");
+        warn("EVP_DecryptInit_ex failed");
     }
     if (EVP_CIPHER_CTX_ctrl (ctx, EVP_CTRL_GCM_SET_TAG, CRYPTO_TAG_SIZE, (uint8_t *) tag) != 1) {
-        errx(1, "EVP_CIPHER_CTX_ctrl failed");
+        warn("EVP_CIPHER_CTX_ctrl failed");
     }
 
     if (EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len) != 1) {
-        errx(1, "EVP_DecryptUpdate failed");
+        warn("EVP_DecryptUpdate failed");
     }
 
     plaintext_len = len;
