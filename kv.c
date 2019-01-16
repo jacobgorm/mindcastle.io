@@ -57,7 +57,7 @@ int kv_global_init(void) {
 
 #define BUFFER_MAX (4<<20)
 
-int kv_init(struct kv *kv, const char *buffer) {
+int kv_init(struct kv *kv, const char *prefix, const char *kvinfo) {
 
     memset(kv, 0, sizeof(*kv));
 
@@ -68,8 +68,8 @@ int kv_init(struct kv *kv, const char *buffer) {
 
     char *cache = NULL;
     char *fallback = NULL;
-    if (buffer) {
-        char *dup = strdup(buffer);
+    if (kvinfo) {
+        char *dup = strdup(kvinfo);
         char *next = dup;
         char *line;
         while ((line = strsep(&next, "\r\n"))) {
@@ -105,7 +105,12 @@ int kv_init(struct kv *kv, const char *buffer) {
         errx(1, "pipe2 failed");
     }
 
-    char kvdata[256] = "kvdata-";
+    char kvdata[256];
+    if (prefix) {
+        sprintf(kvdata, "%s/kvdata-", prefix);
+    } else {
+        strcpy(kvdata, "kvdata-");
+    }
     if (!kv->kvdata) {
         uint8_t kvdata_random[16];
         RAND_bytes(kvdata_random, sizeof(kvdata_random));

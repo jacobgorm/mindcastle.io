@@ -63,7 +63,12 @@ static struct PyModuleDef pykvmodule = {
 
 
 static PyObject *PyKV_init(PyKV * self, PyObject * args) {
-    if (kv_init(&self->kv, NULL) < 0) {
+    char *prefix;
+    if (!PyArg_ParseTuple(args, "s", &prefix)) {
+        PyErr_SetString(PyKVError, "wrong init args");
+        return NULL;
+    }
+    if (kv_init(&self->kv, prefix, NULL) < 0) {
         PyErr_SetString(PyKVError, "failed to init pykv");
         return NULL;
     }
@@ -71,13 +76,13 @@ static PyObject *PyKV_init(PyKV * self, PyObject * args) {
 }
 
 static PyObject *PyKV_open(PyKV * self, PyObject * args) {
-    char *fn;
-    if (!PyArg_ParseTuple(args, "s", &fn)) {
+    char *prefix, *kvinfo;
+    if (!PyArg_ParseTuple(args, "ss", &prefix, &kvinfo)) {
         PyErr_SetString(PyKVError, "wrong open args");
         return NULL;
     }
 
-    if (kv_init(&self->kv, fn) < 0) {
+    if (kv_init(&self->kv, prefix, kvinfo) < 0) {
         PyErr_SetString(PyKVError, "failed to init pykv");
         return NULL;
     }
