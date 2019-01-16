@@ -143,10 +143,6 @@ int dubtree_init(DubTree *t, const uint8_t *key,
     fn = t->fallbacks[0];
     dubtree_mkdir(fn);
 
-    if (!t->cache) {
-        t->cache = strdup(fn);
-    }
-
     t->first.level = -1;
 
     if (valid_chunk_id(&top_id)) {
@@ -1142,19 +1138,21 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
 
             if (equal_chunk_ids(&real_id, &hgs->chunk_id)) {
                 DubTree *t = hgs->t;
-                char *fn = name_chunk(t->cache, hgs->chunk_id);
+                if (t->cache) {
+                    char *fn = name_chunk(t->cache, hgs->chunk_id);
 #if 0
-                r = msync(hgs->buffer, hgs->size, MS_SYNC);
-                if (r < 0) {
-                    err(1, "msync failed for %d\n", hgs->fd);
-                }
+                    r = msync(hgs->buffer, hgs->size, MS_SYNC);
+                    if (r < 0) {
+                        err(1, "msync failed for %d\n", hgs->fd);
+                    }
 #endif
-                r = linkat(AT_FDCWD, procfn, AT_FDCWD, fn, AT_SYMLINK_FOLLOW);
-                close(hgs->fd);
-                if (r < 0 && errno != EEXIST) {
-                    warn("linkat failed for %d -> %s", hgs->fd, fn);
+                    r = linkat(AT_FDCWD, procfn, AT_FDCWD, fn, AT_SYMLINK_FOLLOW);
+                    if (r < 0 && errno != EEXIST) {
+                        warn("linkat failed for %d -> %s", hgs->fd, fn);
+                    }
+                    free(fn);
                 }
-                free(fn);
+                close(hgs->fd);
             } else {
                 fprintf(stderr, "chunk damaged in transit, not caching!!\n");
             }
@@ -1210,7 +1208,7 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
         return DUBTREE_INVALID_HANDLE;
     }
 
-    dubtree_handle_t f = dubtree_open_tmp(t->cache);
+    dubtree_handle_t f = dubtree_open_tmp(t->fallbacks[0]);
     if (invalid_handle(f)) {
         err(1, "unable to create tmp file\n");
     }
