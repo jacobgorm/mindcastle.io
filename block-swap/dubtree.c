@@ -310,7 +310,7 @@ static void decrypt_read(void *opaque, int result)
                 uint8_t tmp[DUBTREE_VALUE_SIZE];
                 int dsize = decrypt256(ds->crypto, tmp, src + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE, hash, src);
                 if (dsize <= 0) {
-                    errx(1, "failed decrypting read");
+                    errx(1, "failed decrypting read, size=%u", size);
                 }
                 memcpy(dst, tmp, dsize);
                 src += size;
