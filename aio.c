@@ -136,7 +136,6 @@ static int curl_socket_cb(CURL *ch, curl_socket_t s, int what, void *opaque, voi
 void aio_wait(void) {
     long timeout = -1;
     int max = -1;
-    struct timeval tv = {0, 0};
     fd_set readset, writeset, errset;
 
     struct curl_state *cs = cs_get(&curl_global);
@@ -164,6 +163,7 @@ void aio_wait(void) {
         }
     }
 
+    struct timeval tv = {1, 0};
     if (timeout >= 0) {
         tv.tv_sec = timeout / 1000;
         if(tv.tv_sec > 1) {
@@ -174,8 +174,7 @@ void aio_wait(void) {
     }
     int r;
     do {
-        r = select(max + 1, &readset, &writeset, &errset,
-                timeout >= 0 ? &tv : NULL);
+        r = select(max + 1, &readset, &writeset, &errset, &tv);
         if (r < 0) {
             warn("select failed");
         }
