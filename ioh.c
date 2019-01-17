@@ -35,8 +35,6 @@ void ioh_event_set(ioh_event *event) {
                 assert(0);
             }
         }
-    } else {
-        printf("event got duplicate wakeup!\n");
     }
 }
 
