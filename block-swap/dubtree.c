@@ -1983,6 +1983,8 @@ void dubtree_close(DubTree *t)
         free(*fb++);
     }
     free(t->cache);
+    curl_easy_cleanup(t->shared_ch);
+    curl_easy_cleanup(t->head_ch);
 }
 
 

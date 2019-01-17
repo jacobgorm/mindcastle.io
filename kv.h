@@ -9,7 +9,7 @@ struct DubTree;
 
 struct kv {
     struct DubTree *t;
-    const char *kvdata;
+    char *kvdata;
     int fds[2];
     uint8_t *crypto_key;
     uint8_t *b;
