@@ -1205,7 +1205,7 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
         return DUBTREE_INVALID_HANDLE;
     }
 
-    dubtree_handle_t f = dubtree_open_tmp(t->fallbacks[0]);
+    dubtree_handle_t f = dubtree_open_tmp(t->cache ? t->cache : t->fallbacks[0]);
     if (invalid_handle(f)) {
         err(1, "unable to create tmp file\n");
     }
