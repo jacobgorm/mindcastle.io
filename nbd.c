@@ -148,7 +148,6 @@ static void got_data(void *opaque)
         reply.magic = htonl(NBD_REPLY_MAGIC);
         reply.error = htonl(0);
         assert(request.magic == htonl(NBD_REQUEST_MAGIC));
-        int len = ntohl(request.len);
         switch(ntohl(request.type)) {
             case NBD_CMD_FLUSH: {
                 printf("got flush\n");
@@ -181,10 +180,9 @@ static void got_data(void *opaque)
                 break;
             }
             case NBD_CMD_WRITE: {
-                assert(!(len % 4096));
                 r = safe_write(ci->sock, &reply, sizeof(reply));
-                uint8_t *buffer = malloc(len);
                 int len = ntohl(request.len);
+                uint8_t *buffer = malloc(len);
                 uint64_t offset = be64toh(request.from);
                 uint8_t *b;
                 int left;
@@ -202,7 +200,6 @@ static void got_data(void *opaque)
             }
             case NBD_CMD_TRIM: {
                 printf("got TRIM!\n");
-                assert(!(len % 4096));
                 r = safe_write(ci->sock, &reply, sizeof(reply));
                 int len = ntohl(request.len);
                 uint64_t offset = be64toh(request.from);
