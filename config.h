@@ -45,7 +45,10 @@ static inline int file_exists(const char *path)
 static inline void
 critical_section_init(critical_section *cs)
 {
-    int ret = pthread_mutex_init(cs, NULL);
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    int ret = pthread_mutex_init(cs, &attr);
     if (ret) {
         errno = ret;
         err(1, "%s: pthread_mutex_init failed", __FUNCTION__);

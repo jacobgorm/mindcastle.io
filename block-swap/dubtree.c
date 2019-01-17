@@ -1117,6 +1117,7 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
     int done = 0;
     int r;
     HttpGetState *hgs = opaque;
+    critical_section_enter(&hgs->lock);
 
     memcpy(hgs->buffer + hgs->offset, ptr, size * nmemb);
     hgs->offset += size * nmemb;
@@ -1161,11 +1162,7 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
         }
     }
 
-    critical_section_enter(&hgs->lock);
-    int num_blocked = hgs->num_blocked;
-    critical_section_leave(&hgs->lock);
-
-    for (int i = 0; i < num_blocked; ++i) {
+    for (int i = 0; i < hgs->num_blocked; ++i) {
         Read *first = hgs->blocked_reads[i].first;
         if (first) {
             int n = hgs->blocked_reads[i].n;
@@ -1184,11 +1181,10 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
     }
 
     if (done) {
-        critical_section_enter(&hgs->lock);
         unmap_file(hgs->buffer, hgs->size);
         hgs->buffer = NULL;
-        critical_section_leave(&hgs->lock);
     }
+    critical_section_leave(&hgs->lock);
 
     return size * nmemb;
 }

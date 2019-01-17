@@ -1,13 +1,13 @@
 #include <assert.h>
 #include <err.h>
 #include <errno.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
 #include <unistd.h>
 
+#include "config.h"
 #include "ioh.h"
 
 /* These must go last or they will mess with e.g. asprintf() */
@@ -26,7 +26,7 @@ static int curl_timer_callback(CURLM *cmd, long timeout_ms, void *userp);
 static int curl_socket_cb(CURL *ch, curl_socket_t s, int what, void *cbp, void *sockp);
 
 struct curl_state {
-    pthread_mutex_t lock;
+    critical_section lock;
     struct CURLM *cmh;
     long timeout;
     ioh_event curl_wakeup;
@@ -37,13 +37,13 @@ struct curl_state {
 
 static inline struct curl_state *cs_get(void *opaque) {
     struct curl_state *cs = opaque;
-    pthread_mutex_lock(&cs->lock);
+    critical_section_enter(&cs->lock);
     return cs;
 }
 
 static inline void cs_put(struct curl_state **pcs) {
     struct curl_state *cs = *pcs;
-    pthread_mutex_unlock(&cs->lock);
+    critical_section_leave(&cs->lock);
     *pcs = NULL;
 }
 
@@ -56,10 +56,7 @@ static void curl_wakeup_cb(void *opaque) {
 
 static void aio_init_curl(struct curl_state *cs) {
 
-    pthread_mutexattr_t attr;
-    pthread_mutexattr_init(&attr);
-    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
-    pthread_mutex_init(&cs->lock, &attr);
+    critical_section_init(&cs->lock);
 
     ioh_event_init(&cs->curl_wakeup, curl_wakeup_cb, cs);
     cs->cmh = curl_multi_init();
