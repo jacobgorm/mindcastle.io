@@ -225,8 +225,7 @@ void aio_wait(void) {
             curl_easy_getinfo(msg->easy_handle, CURLINFO_RESPONSE_CODE,
                     &response);
             if (response != 200 && response != 206) {
-                printf("got bad response %u\n", response);
-                assert(0);
+                errx(1, "got bad HTTP response %u\n", response);
             }
             dubtree_cleanup_curl_handle(msg->easy_handle);
             curl_multi_remove_handle(cs->cmh, msg->easy_handle);

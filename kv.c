@@ -259,6 +259,10 @@ int kv_close(struct kv *kv) {
     } else {
         dubtree_close(kv->t);
     }
+    dubtree_end_find(kv->t, kv->find_context);
+    free(kv->buffer);
     free(kv->t);
+    free(kv->crypto_key);
+    free(kv->kvdata);
     return 0;
 }
