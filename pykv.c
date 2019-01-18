@@ -72,7 +72,7 @@ static PyObject *PyKV_init(PyKV * self, PyObject * args) {
         PyErr_SetString(PyKVError, "failed to init pykv");
         return NULL;
     }
-    return Py_BuildValue("");
+    Py_RETURN_NONE;
 }
 
 static PyObject *PyKV_open(PyKV * self, PyObject * args) {
@@ -86,7 +86,7 @@ static PyObject *PyKV_open(PyKV * self, PyObject * args) {
         PyErr_SetString(PyKVError, "failed to init pykv");
         return NULL;
     }
-    return Py_BuildValue("");
+    Py_RETURN_NONE;
 }
 
 static PyObject *PyKV_save(PyKV * self, PyObject * args) {
