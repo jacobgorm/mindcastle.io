@@ -68,7 +68,7 @@ static PyObject *PyKV_init(PyKV * self, PyObject * args) {
         PyErr_SetString(PyKVError, "wrong init args");
         return NULL;
     }
-    if (kv_init(&self->kv, prefix, NULL) < 0) {
+    if (kv_init(&self->kv, prefix[0] ? prefix : NULL, NULL) < 0) {
         PyErr_SetString(PyKVError, "failed to init pykv");
         return NULL;
     }
