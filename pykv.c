@@ -61,28 +61,15 @@ static struct PyModuleDef pykvmodule = {
     PyKVMethods
 };
 
-
-static PyObject *PyKV_init(PyKV * self, PyObject * args) {
-    char *prefix;
-    if (!PyArg_ParseTuple(args, "s", &prefix)) {
-        PyErr_SetString(PyKVError, "wrong init args");
-        return NULL;
-    }
-    if (kv_init(&self->kv, prefix[0] ? prefix : NULL, NULL) < 0) {
-        PyErr_SetString(PyKVError, "failed to init pykv");
-        return NULL;
-    }
-    Py_RETURN_NONE;
-}
-
-static PyObject *PyKV_open(PyKV * self, PyObject * args) {
-    char *prefix, *kvinfo;
-    if (!PyArg_ParseTuple(args, "ss", &prefix, &kvinfo)) {
+static PyObject *PyKV_open(PyKV *self, PyObject *args) {
+    char *kvinfo;
+    int delete_on_close;
+    if (!PyArg_ParseTuple(args, "sp", &kvinfo, &delete_on_close)) {
         PyErr_SetString(PyKVError, "wrong open args");
         return NULL;
     }
 
-    if (kv_init(&self->kv, prefix, kvinfo) < 0) {
+    if (kv_init(&self->kv, kvinfo, delete_on_close) < 0) {
         PyErr_SetString(PyKVError, "failed to init pykv");
         return NULL;
     }
@@ -103,7 +90,6 @@ static PyObject *PyKV_save(PyKV * self, PyObject * args) {
 }
 
 static PyMethodDef PyKV_methods[] = {
-    { "init", (PyCFunction) PyKV_init, METH_VARARGS, "init"},
     { "open", (PyCFunction) PyKV_open, METH_VARARGS, "open"},
     { "save", (PyCFunction) PyKV_save, METH_VARARGS, "save"},
     { "insert", (PyCFunction) PyKV_insert, METH_VARARGS, "Insert key and value" },

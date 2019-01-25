@@ -26,7 +26,7 @@ struct kv {
 };
 
 int kv_global_init(void);
-int kv_init(struct kv *kv, const char *prefix, const char *kvinfo);
+int kv_init(struct kv *kv, const char *kvinfo, int delete_on_close);
 int kv_insert(struct kv *kv, uint64_t key, const uint8_t *value, size_t size);
 int kv_find(struct kv *kv, uint8_t **rptr, size_t *rsize, uint64_t key);
 int kv_flush(struct kv *kv);
