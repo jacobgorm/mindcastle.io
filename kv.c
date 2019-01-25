@@ -57,7 +57,7 @@ int kv_global_init(void) {
 
 #define BUFFER_MAX (4<<20)
 
-int kv_init(struct kv *kv, const char *prefix, const char *kvinfo) {
+int kv_init(struct kv *kv, const char *kvinfo, int delete_on_close) {
 
     memset(kv, 0, sizeof(*kv));
 
@@ -86,6 +86,9 @@ int kv_init(struct kv *kv, const char *prefix, const char *kvinfo) {
                 for (c = line + 8; *c != '\0' && *c != '\n'; ++c);
                 *c = '\0';
                 kv->kvdata = strdup(line + 7);
+                if (!delete_on_close) {
+                    kv->saved = 1;
+                }
             } else if (!strncmp(line, "fallback=", 9)) {
                 fallback = strdup(line + 9);
             } else if (!strncmp(line, "cache=", 6)) {
@@ -93,7 +96,6 @@ int kv_init(struct kv *kv, const char *prefix, const char *kvinfo) {
             }
         }
         free(dup);
-        kv->saved = 1;
     }
     if (!have_key) {
         RAND_bytes(kv->crypto_key, CRYPTO_KEY_SIZE);
@@ -106,13 +108,9 @@ int kv_init(struct kv *kv, const char *prefix, const char *kvinfo) {
     }
 
     char kvdata[256];
-    if (prefix) {
-        sprintf(kvdata, "%s/kvdata-", prefix);
-    } else {
-        strcpy(kvdata, "kvdata-");
-    }
     if (!kv->kvdata) {
         uint8_t kvdata_random[16];
+        strcpy(kvdata, "kvdata-");
         RAND_bytes(kvdata_random, sizeof(kvdata_random));
         hex(kvdata + strlen(kvdata), kvdata_random, sizeof(kvdata_random));
         kv->kvdata = strdup(kvdata);
