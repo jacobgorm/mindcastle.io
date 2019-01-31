@@ -1307,11 +1307,13 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
             hashtable_insert(&t->ht, chunk_id.id.first64, line);
             *l = line;
         } else {
+            if (errno != EEXIST) {
 #ifdef _WIN32
-            Wwarn("open chunk=%"PRIx64" dirty=%d failed, fn=%s", be64toh(chunk_id.id.first64), dirty, fn);
+                Wwarn("open chunk=%"PRIx64" dirty=%d failed, fn=%s", be64toh(chunk_id.id.first64), dirty, fn);
 #else
-            warn("open chunk=%"PRIx64" dirty=%d failed, fn=%s", be64toh(chunk_id.id.first64), dirty, fn);
+                warn("open chunk=%"PRIx64" dirty=%d failed, fn=%s", be64toh(chunk_id.id.first64), dirty, fn);
 #endif
+            }
             *l = -1; //XXX
         }
         free(fn);
@@ -1514,8 +1516,7 @@ void write_chunk(DubTree *t, chunk_id_t *out_id, Chunk *c,
     dubtree_handle_t f = get_chunk(t, *out_id, 1, 0, &l);
     if (invalid_handle(f)) {
         if (errno == EEXIST) {
-            fprintf(stderr, "not writing pre-existing chunk %"PRIx64"\n",
-                    be64toh(out_id->id.first64));
+            /* benign. */
         } else {
             err(1, "unable to write chunk %"PRIx64, be64toh(out_id->id.first64));
             goto out;
