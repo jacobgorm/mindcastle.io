@@ -20,7 +20,7 @@ typedef struct AioEntry {
     void *opaque;
 } AioEntry;
 
-static AioEntry aios[1024];
+static AioEntry aios[16];
 
 static int curl_timer_callback(CURLM *cmd, long timeout_ms, void *userp);
 static int curl_socket_cb(CURL *ch, curl_socket_t s, int what, void *cbp, void *sockp);
@@ -175,7 +175,7 @@ void aio_wait(void) {
     int r;
     do {
         r = select(max + 1, &readset, &writeset, &errset, &tv);
-        if (r < 0) {
+        if (r < 0 && errno != EINTR) {
             warn("select failed");
         }
     } while (r < 0 && errno == EINTR);
@@ -209,7 +209,6 @@ void aio_wait(void) {
             AioEntry *e = &aios[i];
             int fd = e->fd;
             if (fd >= 0 && FD_ISSET(fd, &readset)) {
-                __sync_bool_compare_and_swap(&e->fd, fd, -1);
                 e->cb(e->opaque);
             }
         }

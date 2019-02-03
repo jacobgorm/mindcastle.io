@@ -126,8 +126,6 @@ static void nbd_read_done(void *opaque, int ret) {
 
     free(ri->buffer);
     free(ri);
-
-    aio_add_wait_object(ci->sock, got_data, ci);
 }
 
 static void nbd_write_done(void *opaque, int ret) {
@@ -194,8 +192,6 @@ static void got_data(void *opaque)
                     }
                 }
                 swap_aio_write(ci->bs, offset / 512, buffer, len / 512, nbd_write_done, buffer);
-                aio_add_wait_object(ci->sock, got_data, ci);
-
                 break;
             }
             case NBD_CMD_TRIM: {
@@ -205,7 +201,6 @@ static void got_data(void *opaque)
                 uint64_t offset = be64toh(request.from);
                 uint8_t *zero = calloc(1, len);
                 swap_aio_write(ci->bs, offset / 512, zero, len / 512, nbd_write_done, zero);
-                aio_add_wait_object(ci->sock, got_data, ci);
                 break;
             }
 
@@ -215,7 +210,6 @@ static void got_data(void *opaque)
                 if (r != sizeof(reply)) {
                     err(1, "sock write (d) failed");
                 }
-                aio_add_wait_object(ci->sock, got_data, ci);
                 break;
             }
         };
@@ -234,7 +228,7 @@ void close_event_cb(void *opaque)
     *pi = 1;
 }
 
-void signal_handler(int s)
+static void signal_handler(int s)
 {
     if (s == SIGINT) {
         ioh_event_set(&exit_event);
