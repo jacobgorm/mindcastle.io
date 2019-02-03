@@ -260,7 +260,7 @@ typedef struct BDRVSwapState {
     thread_event can_insert_event;
     uxen_thread insert_thread;
 
-    thread_event all_flushed_event;
+    ioh_event *quisced_event;
 
     DubTree t;
     void *find_context;
@@ -284,8 +284,6 @@ struct {
     uint64_t shallow_miss, shallow_read, dubtree_read, pre_proc_wait, post_proc_wait;
 } swap_stats = {0,};
 #endif
-
-typedef void BlockDriverCompletionFunc(void *opaque, int ret);
 
 typedef struct SwapAIOCB {
     BlockDriverAIOCB common; /* must go first. */
@@ -418,16 +416,6 @@ static inline void swap_wait_can_insert(BDRVSwapState *s)
     thread_event_wait(&s->can_insert_event);
 }
 
-static inline void swap_signal_all_flushed(BDRVSwapState *s)
-{
-    thread_event_set(&s->all_flushed_event);
-}
-
-static inline void swap_wait_all_flushed(BDRVSwapState *s)
-{
-    thread_event_wait(&s->all_flushed_event);
-}
-
 static void *swap_malloc(void *_s, size_t sz)
 {
     BDRVSwapState *s = _s;
@@ -517,8 +505,8 @@ swap_insert_thread(void * _s)
         load = s->busy_blocks.load;
         swap_unlock(s);
 
-        if (load == 0) {
-            swap_signal_all_flushed(s);
+        if (load == 0 && s->quisced_event) {
+            ioh_event_set(s->quisced_event);
         }
         if (r < 0) {
             err(1, "dubtree_insert failed, r=%d!", r);
@@ -863,7 +851,6 @@ char *swap_resolve_via_fallback(BDRVSwapState *s, const char *fn)
     return check;
 }
 
-
 int swap_open(BlockDriverState *bs, const char *filename, int flags)
 {
     memset(bs, 0 , sizeof(*bs));
@@ -1005,7 +992,6 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
         &s->can_write_event,
         &s->insert_event,
         &s->can_insert_event,
-        &s->all_flushed_event,
     };
 
     for (i = 0; i < sizeof(events) / sizeof(events[0]); ++i) {
@@ -1639,8 +1625,7 @@ static int __swap_nonblocking_write(BDRVSwapState *s, const uint8_t *buf,
     return (BlockDriverAIOCB *) acb;
 }
 
-#if 1
-int swap_flush(BlockDriverState *bs)
+int swap_flush(BlockDriverState *bs, ioh_event *done_event)
 {
     BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
     LruCache *bc = &s->bc;
@@ -1664,6 +1649,8 @@ int swap_flush(BlockDriverState *bs)
 
     debug_printf("swap: emptying cache lines\n");
     swap_lock(s);
+    s->flush = 1;
+    s->quisced_event = done_event;
     for (i = 0; i < (1 << bc->log_lines); ++i) {
         LruCacheLine *cl = &bc->lines[i];
         if (cl->value) {
@@ -1677,53 +1664,10 @@ int swap_flush(BlockDriverState *bs)
         cl->key = 0;
         cl->value = 0;
     }
-    s->flush = 1;
-    swap_unlock(s);
-
-    debug_printf("swap: wait for all writes to complete\n");
-    for (;;) {
-        uint32_t load;
-        swap_lock(s);
-        load = s->busy_blocks.load;
-        swap_unlock(s);
-        if (!load) {
-            break;
-        }
-        swap_signal_write(s);
-        swap_wait_all_flushed(s);
-    }
-    debug_printf("swap: finished waiting for write threads\n");
-
-    assert(s->pqs[0].n_heap == 0);
-    assert(s->pqs[1].n_heap == 0);
-    assert(s->busy_blocks.load == 0);
-
-#ifdef _WIN32
-    /* Release the heap used for buffers back to OS. */
-    int nleaks = __sync_fetch_and_add(&s->alloced, 0);
-    if (nleaks) {
-        debug_printf("swap: leaked %d allocs\n", nleaks);
-        assert(0);
-    }
-    swap_lock(s);
-    HeapDestroy(s->heap);
-    s->heap = HeapCreate(0, 0, 0);
-    swap_unlock(s);
-#endif
-
-    /* Quiesce dubtree and release caches. */
-    swap_lock(s);
-    if (s->find_context) {
-        dubtree_end_find(&s->t, s->find_context);
-        s->find_context = NULL;
-    }
-    s->flush = 0;
-    dubtree_checkpoint(&s->t, &s->top_id, &s->top_hash);
-    swap_write_header(s);
+    swap_signal_write(s);
     swap_unlock(s);
     return 0;
 }
-#endif
 
 void swap_close(BlockDriverState *bs)
 {
@@ -1745,13 +1689,26 @@ void swap_close(BlockDriverState *bs)
     swap_signal_insert(s);
     wait_thread(s->insert_thread);
 
+    assert(s->pqs[0].n_heap == 0);
+    assert(s->pqs[1].n_heap == 0);
+    assert(s->busy_blocks.load == 0);
+
+    swap_lock(s);
+    if (s->find_context) {
+        dubtree_end_find(&s->t, s->find_context);
+        s->find_context = NULL;
+    }
+    s->flush = 0;
+    dubtree_checkpoint(&s->t, &s->top_id, &s->top_hash);
+    swap_write_header(s);
+    swap_unlock(s);
+
     if (s->find_context) {
         dubtree_end_find(&s->t, s->find_context);
         s->find_context = NULL;
     }
     dubtree_close(&s->t);
 
-    thread_event_close(&s->all_flushed_event);
     thread_event_close(&s->write_event);
     thread_event_close(&s->can_write_event);
 

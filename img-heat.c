@@ -40,9 +40,18 @@ static void wait(void) {
     }
 }
 
+static ioh_event close_event;
+static int can_exit = 0;
+
+static void close_event_cb(void *opaque)
+{
+    int *pi = opaque;
+    *pi = 1;
+}
+
 static void *disk_swap_thread(void *bs)
 {
-    for (;;) {
+    while (!can_exit) {
         aio_wait();
     }
     return NULL;
@@ -72,6 +81,7 @@ int main(int argc, char **argv)
     const char *trace = argv[2];
     FILE *tracefile = fopen(trace, "r");
 
+    ioh_event_init(&close_event, close_event_cb, &can_exit);
     swap_open(&bs, dst, 0);
     pthread_t tid;
     pthread_create(&tid, NULL, disk_swap_thread, &bs);
@@ -94,7 +104,8 @@ int main(int argc, char **argv)
             break;
         }
     }
-    swap_flush(&bs);
+    swap_flush(&bs, &close_event);
+    pthread_join(tid, NULL);
     swap_close(&bs);
     printf("primed %lu MiB\n", total / 2);
     return 0;

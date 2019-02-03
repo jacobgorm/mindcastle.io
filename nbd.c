@@ -28,6 +28,10 @@ extern void dump_swapstat(void);
 
 static FILE *tracefile = NULL;
 
+static int should_exit = 0;
+static int should_close = 0;
+static int can_exit = 0;
+
 struct sock_info {
     int sock;
 };
@@ -149,11 +153,7 @@ static void got_data(void *opaque)
         switch(ntohl(request.type)) {
             case NBD_CMD_FLUSH: {
                 printf("got flush\n");
-                swap_flush(ci->bs);
-                r = safe_write(ci->sock, &reply, sizeof(reply));
-                if (r != sizeof(reply)) {
-                    err(1, "sock write (c) failed");
-                }
+                assert(0);
                 break;
             }
 
@@ -216,13 +216,12 @@ static void got_data(void *opaque)
     }
 }
 
-static int should_exit = 0;
-static int should_close = 0;
 static BlockDriverState bs;
 static ioh_event exit_event;
 static ioh_event close_event;
+static ioh_event flushed_event;
 
-void close_event_cb(void *opaque)
+static void close_event_cb(void *opaque)
 {
     int *pi = opaque;
     *pi = 1;
@@ -405,11 +404,16 @@ int main(int argc, char **argv)
 
     ioh_event_init(&close_event, &close_event_cb, &should_close);
     ioh_event_init(&exit_event, &close_event_cb, &should_exit);
-    while (!should_exit) {
+    ioh_event_init(&flushed_event, &close_event_cb, &can_exit);
+    while (!can_exit) {
         aio_wait();
         if (should_close) {
             shell(script, "close", NULL);
             should_close = 0;
+        }
+        if (should_exit) {
+            swap_flush(&bs, &flushed_event);
+            should_exit = 0;
         }
     }
     ioctl(device, NBD_DISCONNECT);
@@ -417,7 +421,6 @@ int main(int argc, char **argv)
     int wstatus;
     waitpid(child, &wstatus, 0);
 
-    swap_flush(&bs);
     dump_swapstat();
     swap_close(&bs);
     return 0;

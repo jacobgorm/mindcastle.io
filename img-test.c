@@ -20,12 +20,6 @@
 void init_genrand64(unsigned long long seed);
 unsigned long long genrand64_int64(void);
 
-#if defined(_WIN32)
-#include <windows.h>
-DECLARE_PROGNAME;
-#endif	/* _WIN32 */
-
-
 #ifdef _WIN32
 static inline double rtc(void)
 {
@@ -49,7 +43,6 @@ static inline double rtc(void)
     return ( (double)(time.tv_sec)+(double)(time.tv_usec)/1e6f );
 }
 #endif
-
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -147,9 +140,18 @@ static void wait(void) {
     }
 }
 
+static ioh_event close_event;
+static int can_exit = 0;
+
+static void close_event_cb(void *opaque)
+{
+    int *pi = opaque;
+    *pi = 1;
+}
+
 static void *disk_swap_thread(void *bs)
 {
-    for (;;) {
+    while (!can_exit) {
         aio_wait();
     }
     return NULL;
@@ -187,6 +189,7 @@ int main(int argc, char **argv)
         swap_create(dst, 100 << 20, 0);
     }
 
+    ioh_event_init(&close_event, close_event_cb, &can_exit);
     swap_open(&bs, dst, 0);
     pthread_t tid;
     pthread_create(&tid, NULL, disk_swap_thread, &bs);
@@ -231,7 +234,6 @@ int main(int argc, char **argv)
                 exit(1);
             }
         }
-        swap_flush(&bs);
         t1 = rtc();
         dt = t1 - t0;
         printf("%.1f writes/s, %.2fMiB/s %s\n", ((double)i) / dt,
@@ -275,7 +277,8 @@ int main(int argc, char **argv)
         t0 = t1;
 
     }
-    swap_flush(&bs);
+    swap_flush(&bs, &close_event);
+    pthread_join(tid, NULL);
     swap_close(&bs);
     printf("test complete\n");
     return 0;
