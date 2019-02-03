@@ -1,3 +1,6 @@
+#ifndef __BLOCK_SWAP_H__
+#define __BLOCK_SWAP_H__
+
 typedef struct BlockDriverState {
     void *opaque;
     uint64_t total_sectors;
@@ -19,9 +22,12 @@ BlockDriverAIOCB *swap_aio_read(BlockDriverState *bs,
         int64_t sector_num, uint8_t *buf, int nb_sectors,
         BlockDriverCompletionFunc *cb, void *opaque);
 
-int swap_flush(BlockDriverState *bs);
+struct ioh_event;
+int swap_flush(BlockDriverState *bs, struct ioh_event *done_event);
 void swap_close(BlockDriverState *bs);
 int swap_create(const char *filename, int64_t size, int flags);
 int swap_open(BlockDriverState *bs, const char *filename, int flags);
 int swap_remove(BlockDriverState *bs);
 int swap_ioctl(BlockDriverState *bs, unsigned long int req, void *buf);
+
+#endif /* __BLOCK_SWAP_H__ */
