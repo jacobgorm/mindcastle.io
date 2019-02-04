@@ -1655,6 +1655,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
 #endif
         sizes[i] = CRYPTO_IV_SIZE + encrypt256(&crypto, enc + CRYPTO_IV_SIZE,
                 hash, v, size, enc);
+        assert(sizes[i] < (1<<16));
         v += size;
         enc += sizes[i];
     }
