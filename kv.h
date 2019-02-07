@@ -2,10 +2,23 @@
 #define __KV_H__
 
 #include <stdint.h>
+#include <pthread.h>
+
+#include "queue.h"
 
 struct DubTree;
 
 #define KV_MAX_KEYS 0x1000
+
+struct kv_buffered_insert {
+    uint8_t *b;
+    uint8_t *buffer;
+    int n;
+    uint64_t keys[KV_MAX_KEYS];
+    uint32_t sizes[KV_MAX_KEYS];
+    uint32_t offsets[KV_MAX_KEYS];
+    TAILQ_ENTRY(kv_buffered_insert) queue_entry;
+};
 
 struct kv {
     struct DubTree *t;
@@ -23,6 +36,14 @@ struct kv {
     int n;
     int saved;
     void *find_context;
+    TAILQ_HEAD(, kv_buffered_insert) insert_queue;
+    pthread_t insert_tid;
+    pthread_mutex_t insert_mutex;
+    pthread_cond_t insert_cond;
+    pthread_mutex_t ready_mutex;
+    pthread_cond_t ready_cond;
+    int num_pending;
+    int shutdown;
 };
 
 int kv_global_init(void);
