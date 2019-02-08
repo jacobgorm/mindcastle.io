@@ -322,5 +322,7 @@ int kv_close(struct kv *kv) {
     free(kv->t);
     free(kv->crypto_key);
     free(kv->kvdata);
+    close(kv->fds[0]);
+    close(kv->fds[1]);
     return 0;
 }
