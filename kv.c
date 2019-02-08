@@ -15,7 +15,7 @@
 #include "aio.h"
 #include "kv.h"
 
-static const int MAX_PENDING = 16;
+static const int MAX_PENDING = 64; // times 8GiB
 
 static void *kv_malloc(void *_s, size_t sz) {
     return malloc(sz);
