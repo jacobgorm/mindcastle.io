@@ -240,7 +240,7 @@ int main(int argc, char **argv)
 {
     int r;
     if (argc < 3) {
-        fprintf(stderr, "Ussage: %s [filename.swap] [statechange-script]\n", argv[0]);
+        fprintf(stderr, "Usage: %s [filename.swap] [statechange-script]\n", argv[0]);
         exit(1);
     }
 
