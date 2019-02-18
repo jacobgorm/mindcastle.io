@@ -58,19 +58,21 @@ install(TARGETS oneroot img-fsck img-test DESTINATION bin)
 find_package(PythonInterp 3.5 REQUIRED)
 find_package(PythonLibs 3.5 REQUIRED)
 
-add_library(pykv SHARED pykv.c)
-set_target_properties(
-    pykv
-    PROPERTIES
-        PREFIX ""
-        OUTPUT_NAME pykv
-        LINKER_LANGUAGE C
-)
-target_include_directories(pykv PUBLIC
-    ${PYTHON_INCLUDE_DIRS}
-    ${NUMPY_INCLUDE_DIR}
-    ${PROJECT_SOURCE_DIR}/src/headers
+if (PYTHONINTERP_FOUND)
+    add_library(pykv SHARED pykv.c)
+    set_target_properties(
+        pykv
+        PROPERTIES
+            PREFIX ""
+            OUTPUT_NAME pykv
+            LINKER_LANGUAGE C
     )
-target_link_libraries(pykv
-    ${PYTHON_LIBRARIES}
-    kv -lpthread -llz4 -luuid ${OPENSSL_LIBRARIES} ${CURL_LIBRARIES})
+    target_include_directories(pykv PUBLIC
+        ${PYTHON_INCLUDE_DIRS}
+        ${NUMPY_INCLUDE_DIR}
+        ${PROJECT_SOURCE_DIR}/src/headers
+        )
+    target_link_libraries(pykv
+        ${PYTHON_LIBRARIES}
+        kv -lpthread -llz4 -luuid ${OPENSSL_LIBRARIES} ${CURL_LIBRARIES})
+endif()
