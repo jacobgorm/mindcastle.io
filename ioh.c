@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <error.h>
+#include <err.h>
 #include <errno.h>
 
 #include "ioh.h"
@@ -13,7 +14,10 @@
 static int event_fds[2];
 
 int ioh_init(void) {
-    int r = pipe2(event_fds, O_DIRECT | O_NONBLOCK);
+    int r = pipe2(event_fds, O_DIRECT);
+    assert(!r);
+    int flags = fcntl(event_fds[0], F_GETFL, 0) | O_NONBLOCK;
+    r = fcntl(event_fds[0], F_SETFL, flags);
     assert(!r);
     return r;
 }
@@ -28,12 +32,7 @@ void ioh_event_set(ioh_event *event) {
         uintptr_t e = (uintptr_t) event;
         int r = write(event_fds[1], &e, sizeof(e));
         if (r != sizeof(e)) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                assert(0);
-            } else {
-                printf("%s:%d r %d %d:%s\n", __FUNCTION__, __LINE__, r, errno, strerror(errno));
-                assert(0);
-            }
+            err(1, "%s:%d r %d %d:%s\n", __FUNCTION__, __LINE__, r, errno, strerror(errno));
         }
     }
 }
