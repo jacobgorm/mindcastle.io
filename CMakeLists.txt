@@ -55,10 +55,10 @@ target_link_libraries(img-heat swap -lpthread -llz4 -luuid ${OPENSSL_LIBRARIES} 
 
 install(TARGETS oneroot img-fsck img-test DESTINATION bin)
 
-find_package(PythonInterp 3.5 REQUIRED)
-find_package(PythonLibs 3.5 REQUIRED)
+find_package(PythonInterp 3.0)
 
 if (PYTHONINTERP_FOUND)
+    find_package(PythonLibs 3.0 REQUIRED)
     add_library(pykv SHARED pykv.c)
     set_target_properties(
         pykv
