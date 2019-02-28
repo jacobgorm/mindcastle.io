@@ -55,6 +55,7 @@
 #include "thread-event.h"
 //#include "timer.h"
 #include "queue.h"
+#include "tinyuuid.h"
 
 #ifndef _WIN32
 #include <sys/mman.h>
@@ -765,7 +766,7 @@ static int swap_read_header(BDRVSwapState *s)
         if (!strncmp(line, "size=", 5)) {
             s->size = strtoll(line + 5, NULL, 0);
         } else if (!strncmp(line, "uuid=", 5)) {
-            uuid_parse(line + 5 + (line[5]=='{'), s->uuid);
+            tiny_uuid_parse(line + 5 + (line[5]=='{'), s->uuid);
         } else if (!strncmp(line, "swapdata=", 9)) {
             s->swapdata = strdup(line + 9);
             if (!s->swapdata) {
@@ -803,7 +804,7 @@ static int swap_write_header(BDRVSwapState *s)
     }
 
     char uuid_str[37];
-    uuid_unparse_lower(s->uuid, uuid_str);
+    tiny_uuid_unparse(s->uuid, uuid_str);
     fprintf(f, "uuid=%s\n", uuid_str);
     fprintf(f, "size=%lu\n", s->size);
 
@@ -918,7 +919,7 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
      * of "swapdata" component. */
     char *default_swapdata;
     char uuid_str[37];
-    uuid_unparse_lower(s->uuid, uuid_str);
+    tiny_uuid_unparse(s->uuid, uuid_str);
     asprintf(&default_swapdata, "swapdata-%s", uuid_str);
     asprintf(&swapdata, "%s/%s",
             real_path, s->swapdata ? s->swapdata : default_swapdata);
@@ -1742,8 +1743,8 @@ int swap_create(const char *filename, int64_t size, int flags)
     }
 
     //uuid_generate_truly_random(uuid);
-    uuid_generate_random(uuid);
-    uuid_unparse_lower(uuid, uuid_str);
+    tiny_uuid_generate_random(uuid);
+    tiny_uuid_unparse(uuid, uuid_str);
 
     ret = fprintf(file, "uuid=%s\n", uuid_str);
     if (ret < 0) {

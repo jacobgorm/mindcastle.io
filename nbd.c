@@ -23,6 +23,7 @@
 #include "aio.h"
 #include "block-swap.h"
 #include "ioh.h"
+#include "tinyuuid.h"
 
 extern void dump_swapstat(void);
 
@@ -387,7 +388,7 @@ int main(int argc, char **argv)
     uuid_t uuid;
     swap_ioctl(&bs, 0, uuid);
     char uuid_str[37];
-    uuid_unparse_lower(uuid, uuid_str);
+    tiny_uuid_unparse(uuid, uuid_str);
 
     char pid_str[16];
     sprintf(pid_str, "%d", getpid());
