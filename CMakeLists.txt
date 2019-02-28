@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.4)
 
 project("oneroot" C)
+option(BUILD_PYKV "build pykv python3 extension" OFF)
+
 find_package(CURL)
 find_package(OpenSSL)
 
@@ -27,16 +29,6 @@ add_library(swap
     block-swap/simpletree.c
     )
 
-add_library(kv
-    kv.c
-    aio.c
-    ioh.c
-    block-swap/crypto.c
-    block-swap/dubtree.c
-    block-swap/hashtable.c
-    block-swap/simpletree.c
-    )
-
 install(TARGETS swap
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib)
@@ -55,9 +47,18 @@ target_link_libraries(img-heat swap -lpthread -llz4 -luuid ${OPENSSL_LIBRARIES} 
 
 install(TARGETS oneroot img-fsck img-test DESTINATION bin)
 
-find_package(PythonInterp 3.0)
+if (BUILD_PYKV)
+    add_library(kv
+        kv.c
+        aio.c
+        ioh.c
+        block-swap/crypto.c
+        block-swap/dubtree.c
+        block-swap/hashtable.c
+        block-swap/simpletree.c
+        )
 
-if (PYTHONINTERP_FOUND)
+    find_package(PythonInterp 3.0 REQUIRED)
     find_package(PythonLibs 3.0 REQUIRED)
     add_library(pykv SHARED pykv.c)
     set_target_properties(
