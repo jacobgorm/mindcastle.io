@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.4)
 
-project("oneroot" C)
+project("mindcastle" C)
 option(BUILD_PYKV "build pykv python3 extension" OFF)
 
 find_package(CURL)
@@ -34,8 +34,8 @@ install(TARGETS swap
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib)
 
-add_executable(oneroot nbd.c)
-target_link_libraries(oneroot swap -lpthread -llz4 ${OPENSSL_LIBRARIES} ${CURL_LIBRARIES})
+add_executable(mindcastle nbd.c)
+target_link_libraries(mindcastle swap -lpthread -llz4 ${OPENSSL_LIBRARIES} ${CURL_LIBRARIES})
 
 add_executable(img-test img-test.c mt19937-64.c)
 target_link_libraries(img-test swap -lpthread -llz4 ${OPENSSL_LIBRARIES} ${CURL_LIBRARIES})
@@ -46,7 +46,7 @@ target_link_libraries(img-fsck swap -lpthread -llz4 ${OPENSSL_LIBRARIES} ${CURL_
 add_executable(img-heat img-heat.c mt19937-64.c)
 target_link_libraries(img-heat swap -lpthread -llz4 ${OPENSSL_LIBRARIES} ${CURL_LIBRARIES})
 
-install(TARGETS oneroot img-fsck img-test DESTINATION bin)
+install(TARGETS mindcastle img-fsck img-test DESTINATION bin)
 
 if (BUILD_PYKV)
     add_library(kv
