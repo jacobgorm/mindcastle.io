@@ -1,6 +1,6 @@
 # Welcome to Mindcastle.io
 
-This repository contains the Mindcastle.io (formerly oneroot) distributed block
+This repository contains the Mindcastle.io (formerly mindcastle) distributed block
 device, whose aim is to eventually become the 'git for storage'. It is
 currently mostly useful for local use, and for creating locally writable mounts that
 can be exported simply by placing the chunked files it creates on an HTTP
@@ -42,30 +42,34 @@ so feel free to use that instead if you prefer.
 
 ## Running
 
-You can run mindcastle's NBD backend with (must be root, prefix with sudo if that is your thing):
+You can run mindcastle's NBD backend with (must be root, prefix with sudo as necessary):
 
 ```bash
 modprobe nbd
-oneroot mydisk.swap ./statechange.sh
+build/mindcastle mydisk.swap ./statechange.sh
 ```
 
-oneroot implements a user-space block device on top of Linux' nbd module.  The
+mindcastle implements a user-space block device on top of Linux' nbd module.  The
 mydisk.swap file is a tiny meta-data text file that will be created if not
 there already. The actual disk contents will go inside a directory called
-swapdata-UUID, where UUID gets randomly generated. As long as oneroot is
+swapdata-UUID, where UUID gets randomly generated. As long as mindcastle is
 running, you now have an empty block device that you can format and use
 as any other block device. (To not have to do this manually each time, the
-script "stagechange.sh" takes care to do this automically, you can edit the
+script "statechange.sh" takes care to do this automically, you can edit the
 script to choose the type of filesystem or perform automated tasks on, e.g,
 automatically syncing files to the file system and then unmounting it when done.)
 
-If you peek inside swapdata-UUID, you will see a lot of regularly-sized files
-(currently the chunking size is set to 1MiB) with some insanely long file names.
-The file names are derived from the sha512 hashes of the file contents, as you
-can verify by running the 'sha512' tool against one of them (the hashes get truncated
-at 256 bits when used for filenames). If you wanted to publish it on an HTTP server, say running out of /srv/http, you would do
-something line this (assuming the HTTP server serves files out /srv/http and there is a http
-user on the system that the server is running as):
+Please note the it needs to be resolvable in your $PATH, which is why it is
+shown prefixed with ./ above.
+
+If you peek inside swapdata-UUID, you will see a lot of regularly-sized files.
+The file names are derived from the sha512 hashes (but shortened to 256 bits
+for your sanity) of the file contents, as you can verify by running the
+'sha512' tool against one of them (the hashes get truncated at 256 bits when
+used for filenames). If you wanted to publish it on an HTTP server, say running
+out of /srv/http, you would do something line this (assuming the HTTP server
+serves files out /srv/http and there is a http user on the system that the
+server is running as):
 
 ```bash
 cp -r swapdata-UUID /srv/http
@@ -91,12 +95,12 @@ server acting as the storage backend.
 Then, on the client machine, you could connect the block device with:
 
 ```bash
-oneroot mydisk.swap ./stagechange.sh
+build/mindcastle mydisk.swap ./statechange.sh
 ```
 
-Where "./stagechange.sh" is the path to the default stagechange script, which will
+Where "./statechange.sh" is the path to the default statechange script, which will
 format the volume if necessary, and mount and later unmount it under
-/tmp/mnt-UUID. The script interacts with the oneroot process using signals,
+/tmp/mnt-UUID. The script interacts with the mindcastle process using signals,
 and the user can do this too. For example, to trigger a clean unmount and
 shutdown, just do a
 
@@ -104,6 +108,13 @@ shutdown, just do a
 kill -1 PID
 ```
 
-Where PID is that of the first oneroot process, you should see this logged
-by the script on startup. See the stagechange.sh script comments for more
+Where PID is that of the first mindcastle process, you should see this logged
+by the script on startup. See the statechange.sh script comments for more
 details.
+
+## Using with docker
+
+We normally use mindcastle as for broadcasting VMs or container images authored
+using docker. Please see the example script dockerexport.sh and the
+statechange-docker.sh script that we use as a template when building and
+exporting a docker image to mindcastle.
