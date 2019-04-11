@@ -1242,7 +1242,8 @@ static int __swap_dubtree_read(BDRVSwapState *s, SwapAIOCB *acb)
     }
     acb->sizes = sizes;
 
-    decomp = malloc((DUBTREE_BLOCK_SIZE + CRYPTO_IV_SIZE) * (end - start));
+    size_t decomp_size = (DUBTREE_BLOCK_SIZE + CRYPTO_IV_SIZE) * (end - start);
+    decomp = malloc(decomp_size);
 
     if (!decomp) {
         errx(1, "OOM error %s line %d", __FUNCTION__, __LINE__);
@@ -1258,7 +1259,8 @@ static int __swap_dubtree_read(BDRVSwapState *s, SwapAIOCB *acb)
 
     int retries = 0;
     do {
-        r = dubtree_find(&s->t, start, end - start, decomp,
+        r = dubtree_find(&s->t, start, end - start,
+                decomp, decomp_size,
                 map, sizes,
                 dubtree_read_complete_cb, acb, s->find_context);
     } while (r == -EAGAIN && ++retries < 10);

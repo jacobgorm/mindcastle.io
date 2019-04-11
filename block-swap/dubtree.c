@@ -763,7 +763,8 @@ void dubtree_end_find(DubTree *t, void *ctx)
 }
 
 int dubtree_find(DubTree *t, uint64_t start, int num_keys,
-        uint8_t *buffer, uint8_t *map, uint32_t *sizes,
+        uint8_t *buffer, size_t buffer_size,
+        uint8_t *map, uint32_t *sizes,
         read_callback cb, void *opaque, void *ctx)
 {
     int i, r;
@@ -913,6 +914,7 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
     hashtable_init(&c.ht, NULL, NULL);
 
     int dst;
+    uint32_t read_total = 0;
     for (i = dst = 0; i < num_keys; ++i) {
         int size = sources[i].size;
         if (size) {
@@ -920,12 +922,18 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
                        size);
         }
         sizes[i] = size;
+        read_total += size;
         memcpy(hashes + CRYPTO_TAG_SIZE * i, sources[i].hash.bytes,
                 CRYPTO_TAG_SIZE);
         dst += size;
     }
 
-    r = flush_reads(t, &c, NULL, 0, cs);
+    if (read_total <= buffer_size) {
+        r = flush_reads(t, &c, NULL, 0, cs);
+    } else {
+        assert(0); // XXX we lack a proper way to propagate back buffer too small errs
+        r = -1;
+    }
     if (r < 0) {
         succeeded = 0;
     }

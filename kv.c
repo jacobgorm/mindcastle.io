@@ -86,7 +86,7 @@ int kv_global_init(void) {
     return 0;
 }
 
-#define BUFFER_MAX (8<<20)
+#define BUFFER_MAX (32<<20)
 
 int kv_init(struct kv *kv, const char *kvinfo, int delete_on_close) {
     memset(kv, 0, sizeof(*kv));
@@ -266,7 +266,8 @@ int kv_find(struct kv *kv, uint8_t **rptr, size_t *rsize, uint64_t key) {
         kv->base = base;
         kv->last_found = ~0ULL;
         do {
-            r = dubtree_find(kv->t, base, range, kv->buffer, NULL, kv->sizes,
+            r = dubtree_find(kv->t, base, range, kv->buffer, BUFFER_MAX,
+                    NULL, kv->sizes,
                     io_done, kv, kv->find_context);
         } while (r == -EAGAIN);
         wait(kv);
