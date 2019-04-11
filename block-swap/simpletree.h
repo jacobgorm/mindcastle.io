@@ -67,14 +67,14 @@ typedef struct SimpleTreeIterator {
 } SimpleTreeIterator;
 
 typedef struct SimpleTreeInnerNode {
-    int count;
+    uint32_t count;
     SimpleTreeInternalKey keys[SIMPLETREE_INNER_M];
     node_t children[SIMPLETREE_INNER_M + 1];
     hash_t child_hashes[SIMPLETREE_INNER_M + 1];
 } SimpleTreeInnerNode ;
 
 typedef struct SimpleTreeLeafNode {
-    int count;
+    uint32_t count;
     node_t next;
     hash_t next_hash;
     SimpleTreeInternalKey keys[SIMPLETREE_LEAF_M];
