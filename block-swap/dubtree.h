@@ -77,7 +77,7 @@ typedef struct DubTree {
 
 } DubTree;
 
-int dubtree_insert(DubTree *t, uint32_t numKeys, uint64_t* keys,
+int dubtree_insert(DubTree *t, int numKeys, uint64_t* keys,
         uint8_t *values, uint32_t *sizes, int force_level);
 
 void *dubtree_prepare_find(DubTree *t);

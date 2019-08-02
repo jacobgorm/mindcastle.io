@@ -332,7 +332,7 @@ size_t swap_set_key(void *out, const void *in)
     swap_stats.compressed += DUBTREE_BLOCK_SIZE;
 #endif
 
-    size_t size = LZ4_compress_default((const char*)in, (char*) out, DUBTREE_BLOCK_SIZE, DUBTREE_BLOCK_SIZE * 2);
+    int size = LZ4_compress_default((const char*)in, (char*) out, DUBTREE_BLOCK_SIZE, DUBTREE_BLOCK_SIZE * 2);
     if (size >= DUBTREE_BLOCK_SIZE) {
         memcpy(out, in, DUBTREE_BLOCK_SIZE);
         size = DUBTREE_BLOCK_SIZE;
@@ -340,7 +340,7 @@ size_t swap_set_key(void *out, const void *in)
     return size;
 }
 
-static inline int swap_get_key(void *out, const void *in, size_t size)
+static inline int swap_get_key(void *out, const void *in, int size)
 {
 #ifdef SWAP_STATS
     swap_stats.decompressed += DUBTREE_BLOCK_SIZE;
