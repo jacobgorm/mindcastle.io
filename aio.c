@@ -93,6 +93,10 @@ void aio_add_wait_object(int fd, void (*cb) (void *opaque), void *opaque) {
     assert(0);
 }
 
+#define MAX_PENDING_CHS 256
+static CURL *pending_chs[MAX_PENDING_CHS] = {};
+static int num_pending_chs = 0;
+
 int aio_add_curl_handle(CURL *ch) {
     int r;
     struct curl_state *cs = cs_get(&curl_global);
@@ -100,6 +104,13 @@ int aio_add_curl_handle(CURL *ch) {
     if (cr == CURLM_OK) {
         ioh_event_set(&cs->curl_wakeup);
         r = 0;
+#if LIBCURL_VERSION_NUM >= 0x074100
+    } else if (cr == CURLM_RECURSIVE_API_CALL) {
+        if (num_pending_chs >= MAX_PENDING_CHS) {
+            errx(1, "too many pending curl handles");
+        }
+        pending_chs[num_pending_chs++] = ch;
+#endif
     } else {
         errx(1, "%s %p\n", curl_multi_strerror(cr), cs->cmh);
         r = -1;
@@ -230,5 +241,10 @@ void aio_wait(void) {
             curl_easy_cleanup(msg->easy_handle);
         }
     }
+    for (int i = 0; i < num_pending_chs; ++i) {
+        aio_add_curl_handle(pending_chs[i]);
+        pending_chs[i] = NULL;
+    }
+    num_pending_chs = 0;
     cs_put(&cs);
 }
