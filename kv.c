@@ -103,7 +103,8 @@ int kv_init(struct kv *kv, const char *kvinfo, int delete_on_close) {
     kv->crypto_key = malloc(CRYPTO_KEY_SIZE);
 
     char *cache = NULL;
-    char *fallback = NULL;
+    char *fallbacks[16] = {};
+    int num_fallbacks = 1; // first is kvdata
     if (kvinfo) {
         char *dup = strdup(kvinfo);
         char *next = dup;
@@ -126,7 +127,7 @@ int kv_init(struct kv *kv, const char *kvinfo, int delete_on_close) {
                     kv->saved = 1;
                 }
             } else if (!strncmp(line, "fallback=", 9)) {
-                fallback = strdup(line + 9);
+                fallbacks[num_fallbacks++] = strdup(line + 9);
             } else if (!strncmp(line, "cache=", 6)) {
                 cache = strdup(line + 6);
             }
@@ -153,11 +154,7 @@ int kv_init(struct kv *kv, const char *kvinfo, int delete_on_close) {
     } else {
         strcpy(kvdata, kv->kvdata);
     }
-    char *fallbacks[] = {
-        kvdata,
-        fallback,
-        NULL,
-    };
+    fallbacks[0] = kvdata;
     kv->t = malloc(sizeof(DubTree));
     if (dubtree_init(kv->t, kv->crypto_key, top_id, top_hash, fallbacks, cache,
                 kv_malloc, kv_free, NULL) != 0) {
