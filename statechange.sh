@@ -9,7 +9,7 @@
 # then flush and close, you can put this functionality in the open) handler,
 # and finalize by sending SIGHUP to $PID.
 
-echo $0 PID=$PID UUID=$UUID $1
+echo $0 DEVICE=$DEVICE PID=$PID UUID=$UUID $1
 MNT=/tmp/mnt-$UUID
 
 case "$1" in

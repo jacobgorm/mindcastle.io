@@ -52,27 +52,6 @@ struct read_info {
 
 static void got_data(void *opaque);
 
-static void shell(char *arg, ...) {
-    char *list[16];
-    int l = 0;
-    va_list ap;
-    va_start(ap, arg);
-    char *a = arg;
-    while (a) {
-        list[l++] = a;
-        a = va_arg(ap, char *);
-    }
-    list[l] = NULL;
-
-    if (!fork()) {
-        if (execvp(list[0], list)) {
-            err(1, "execvp error");
-        }
-        va_end(ap);
-        exit(1);
-    }
-}
-
 static inline int safe_read(int fd, void *buf, size_t sz)
 {
     uint8_t *b = buf;
@@ -90,7 +69,7 @@ static inline int safe_read(int fd, void *buf, size_t sz)
         left -= r;
         b += r;
     }
-    return sz;
+    return sz - left;
 }
 
 static inline int safe_write(int fd, const void *buf, size_t sz)
@@ -110,9 +89,32 @@ static inline int safe_write(int fd, const void *buf, size_t sz)
         left -= r;
         b += r;
     }
-    return sz;
+    return sz - left;
 }
 
+static pid_t shell(char *arg, ...) {
+
+    pid_t child = fork();
+    if (!child) {
+        char *list[16];
+        int l = 0;
+        va_list ap;
+        va_start(ap, arg);
+        char *a = arg;
+        while (a) {
+            list[l++] = a;
+            a = va_arg(ap, char *);
+        }
+        va_end(ap);
+        list[l] = NULL;
+        if (execvp(list[0], list)) {
+            err(1, "execvp error");
+        }
+        exit(0);
+    } else {
+        return child;
+    }
+}
 
 static void nbd_read_done(void *opaque, int ret) {
     int r;
@@ -150,7 +152,10 @@ static void got_data(void *opaque)
         memcpy(reply.handle, request.handle, sizeof(reply.handle));
         reply.magic = htonl(NBD_REPLY_MAGIC);
         reply.error = htonl(0);
-        assert(request.magic == htonl(NBD_REQUEST_MAGIC));
+        if (request.magic != htonl(NBD_REQUEST_MAGIC)) {
+            printf("skipping request with bad magic %x\n", htonl(request.magic));
+            return;
+        }
         switch(ntohl(request.type)) {
             case NBD_CMD_FLUSH: {
                 printf("got flush\n");
@@ -234,6 +239,13 @@ static void signal_handler(int s)
         ioh_event_set(&exit_event);
     } else if (s == SIGHUP) {
         ioh_event_set(&close_event);
+    } else if (s == SIGCHLD) {
+        int wstatus;
+        wait(&wstatus);
+        if (WIFSIGNALED(wstatus)) {
+            printf("child signaled with %u\n", WTERMSIG(wstatus));
+            exit(1);
+        }
     }
 }
 
@@ -272,6 +284,7 @@ int main(int argc, char **argv)
         switch (i) {
             case SIGHUP:
             case SIGINT:
+            case SIGCHLD:
                 sigaction(i, &sig, NULL);
                 break;
             default:
@@ -314,71 +327,62 @@ int main(int argc, char **argv)
 
     char dev[32];
     int device;
-    for (int i = 0; i < 16; ++i) {
+    pid_t child = -1;
+    for (int i = 0; ; ++i) {
         sprintf(dev, "/dev/nbd%u", i);
         device = open(dev, O_RDWR);
         if (device < 0) {
-            if (errno == EBUSY) {
-                continue;
+            err(1, "nbd device open failed for %s", dev);
+        }
+
+        int ok = 0;
+        child = fork();
+        if (child == 0) {
+            printf("connecting to %s...\n", dev);
+            close(sp[0]);
+            if (ioctl(device, NBD_SET_SOCK, sp[1]) == -1){
+                fprintf(stderr, "NBD_SET_SOCK on %s failed %s\n", dev, strerror(errno));
+                ok = 0;
+                r = safe_write(sp2[1], &ok, sizeof(ok));
+                exit(1);
             } else {
-                err(1, "nbd device open failed");
+                ok = 1;
+                r = safe_write(sp2[1], &ok, sizeof(ok));
+
+                r = ioctl(device, NBD_SET_SIZE_BLOCKS, 1000 << 20);
+                if (r) {
+                    err(1, "device ioctl (a) failed");
+                }
+
+                r = ioctl(device, NBD_SET_BLKSIZE, 0x1000);
+                if (r) {
+                    err(1, "device ioctl (b) failed");
+                }
+
+                r = ioctl(device, NBD_SET_TIMEOUT, 120);
+                if (r) {
+                    err(1, "device ioctl (c) failed");
+                }
+
+                r = ioctl(device, NBD_DO_IT);
+                fprintf(stderr, "nbd device terminated %d\n", r);
+                if (r == -1)
+                    fprintf(stderr, "%s\n", strerror(errno));
+                ioctl(device, NBD_CLEAR_QUE);
+                ioctl(device, NBD_CLEAR_SOCK);
+                exit(0);
             }
         }
-        break;
-    }
 
-    printf("connecting to NBD...\n");
-    r = ioctl(device, NBD_SET_SIZE_BLOCKS, 1000 << 20);
-    if (r) {
-        err(1, "device ioctl (a) failed");
-    }
-
-    r = ioctl(device, NBD_SET_BLKSIZE, 0x1000);
-    if (r) {
-        err(1, "device ioctl (b) failed");
-    }
-
-    r = ioctl(device, NBD_SET_TIMEOUT, 120);
-    if (r) {
-        err(1, "device ioctl (c) failed");
-    }
-
-    r = ioctl(device, NBD_CLEAR_SOCK);
-    if (r) {
-        err(1, "device ioctl (d) failed");
-    }
-
-    int ok = 0;
-    int child = fork();
-    if (child == 0) {
-        close(sp[0]);
-        if(ioctl(device, NBD_SET_SOCK, sp[1]) == -1){
-            fprintf(stderr, "NBD_SET_SOCK failed %s\n", strerror(errno));
-            ok = 0;
-            r = safe_write(sp2[1], &ok, sizeof(ok));
-        } else {
-            ok = 1;
-            r = safe_write(sp2[1], &ok, sizeof(ok));
-            r = ioctl(device, NBD_DO_IT);
-            fprintf(stderr, "nbd device terminated %d\n", r);
-            if (r == -1)
-                fprintf(stderr, "%s\n", strerror(errno));
+        r = safe_read(sp2[0], &ok, sizeof(ok));
+        if (r != sizeof(ok)) {
+            err(1, "socket pair read failed");
         }
-        ioctl(device, NBD_CLEAR_QUE);
-        ioctl(device, NBD_CLEAR_SOCK);
-        exit(0);
+        if (ok) {
+            break;
+        }
     }
-
-    r = safe_read(sp2[0], &ok, sizeof(ok));
-    if (r != sizeof(ok)) {
-        err(1, "socket pair read failed");
-    }
-
-    if (!ok) {
-        fprintf(stderr, "failed to init nbd, exiting!\n");
-        exit(1);
-    }
-    printf("configuring device using %s\n", script);
+    printf("configuring %s using %s\n", dev, script);
 
     struct client_info *ci = malloc(sizeof(struct client_info));
     ci->sock = sp[0];
