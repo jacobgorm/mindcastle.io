@@ -44,7 +44,7 @@ void set_node_type(SimpleTree *st, node_t n,
 
 static void init_tree(SimpleTree *st, Crypto *crypto)
 {
-    memset(st->nodes, 0, sizeof(*st));
+    memset(st, 0, sizeof(*st));
     st->crypto = crypto;
     st->fd = -1;
     st->node_buf = malloc(SIMPLETREE_NODESIZE);
