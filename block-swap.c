@@ -1076,6 +1076,7 @@ static inline void swap_common_cb(SwapAIOCB *acb)
     }
     //aio_del_wait_object(&acb->event);
     free(acb->sizes);
+    free(acb->map);
     free(acb);
 }
 
@@ -1134,7 +1135,6 @@ static void swap_read_cb(void *opaque)
         memcpy(acb->buffer, acb->tmp + acb->modulo, acb->size - acb->modulo);
         free(acb->tmp);
     }
-    free(acb->map);
     acb->common.cb(acb->common.opaque, 0);
     swap_common_cb(acb);
 }
@@ -1366,7 +1366,7 @@ BlockDriverAIOCB *swap_aio_read(BlockDriverState *bs,
     uint32_t modulo = offset & mask;
     uint32_t size = (nb_sectors << BDRV_SECTOR_BITS) + modulo;
     uint8_t *tmp = NULL;
-    uint8_t *map;
+    uint8_t *map = NULL;
     ssize_t found;
 
     /* XXX we should use the map to do this more precisely. */
