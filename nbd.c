@@ -401,9 +401,9 @@ int main(int argc, char **argv)
     setenv("UUID", uuid_str, 1);
     setenv("PID", pid_str, 1);
 
-    ioh_event_init(&close_event, &close_event_cb, &should_close);
-    ioh_event_init(&exit_event, &close_event_cb, &should_exit);
-    ioh_event_init(&flushed_event, &close_event_cb, &can_exit);
+    ioh_event_init(&close_event, close_event_cb, &should_close);
+    ioh_event_init(&exit_event, close_event_cb, &should_exit);
+    ioh_event_init(&flushed_event, close_event_cb, &can_exit);
 
     shell(script, needs_format ? "create" : "open", NULL);
 
