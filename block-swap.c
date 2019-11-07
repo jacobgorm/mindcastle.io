@@ -947,7 +947,7 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
     }
 
     if (dubtree_init(&s->t, s->crypto_key, s->top_id, s->top_hash, s->fallbacks, s->cache,
-                swap_malloc, swap_free, s) != 0) {
+                0, swap_malloc, swap_free, s) != 0) {
         warn("swap: failed to init dubtree");
         r = -1;
         goto out;

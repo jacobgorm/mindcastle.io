@@ -90,6 +90,7 @@ static inline void chunk_ref(DubTree *t, chunk_id_t chunk_id)
 int dubtree_init(DubTree *t, const uint8_t *key,
         chunk_id_t top_id, hash_t top_hash,
         char **fallbacks, char *cache,
+        int use_large_values,
         malloc_callback malloc_cb, free_callback free_cb,
         void *opaque)
 {
@@ -103,6 +104,7 @@ int dubtree_init(DubTree *t, const uint8_t *key,
 
     memset(t, 0, sizeof(DubTree));
     t->crypto_key = key;
+    t->use_large_values = use_large_values;
     t->malloc_cb = malloc_cb;
     t->free_cb = free_cb;
     t->opaque = opaque;
@@ -1665,7 +1667,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
 #endif
         sizes[i] = CRYPTO_IV_SIZE + encrypt256(&crypto, enc + CRYPTO_IV_SIZE,
                 hash, v, size, enc);
-        assert(sizes[i] < (1<<16));
+        assert(t->use_large_values || sizes[i] < (1<<16));
         v += size;
         enc += sizes[i];
     }
@@ -1751,7 +1753,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     }
 
     /* Create the new B-tree to index the destination level. */
-    simpletree_create(&st, &crypto);
+    simpletree_create(&st, &crypto, t->use_large_values);
 
     hash_t nil_hash = {};
     hash_t t_hash = nil_hash;

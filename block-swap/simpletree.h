@@ -25,6 +25,7 @@ typedef struct SimpleTreeMetaNode {
  * during tree construction. */
 
 typedef struct SimpleTree {
+    int leaf_m;
     node_t nodes[16];
     node_t prev;
     uint8_t *mem;
@@ -53,6 +54,13 @@ typedef struct {
     uint32_t offset : 24;
     uint32_t size : 16;
     hash_t hash;
+} __attribute__((__packed__)) SimpleTreeSmallValue;
+
+typedef struct {
+    uint32_t chunk;
+    uint32_t offset;
+    uint32_t size;
+    hash_t hash;
 } __attribute__((__packed__)) SimpleTreeValue;
 
 typedef struct SimpleTreeResult {
@@ -77,8 +85,7 @@ typedef struct SimpleTreeLeafNode {
     int count;
     node_t next;
     hash_t next_hash;
-    SimpleTreeInternalKey keys[SIMPLETREE_LEAF_M];
-    SimpleTreeValue values[SIMPLETREE_LEAF_M];
+    SimpleTreeInternalKey keys[0];
 } SimpleTreeLeafNode ;
 
 typedef struct SimpleTreeUserNode {
@@ -104,7 +111,7 @@ typedef struct SimpleTreeNode {
     } u;
 } SimpleTreeNode;
 
-void simpletree_create(SimpleTree *st, Crypto *crypto);
+void simpletree_create(SimpleTree *st, Crypto *crypto, int use_large_values);
 void *simpletree_get_node(SimpleTree *st, node_t n, hash_t hash);
 void simpletree_put_node(SimpleTree *st, node_t n);
 
@@ -127,7 +134,8 @@ static inline size_t simpletree_node_size(void)
     printf("szk %lx\n", sizeof(SimpleTreeInternalKey));
     printf("szv %lx\n", sizeof(SimpleTreeValue));
     printf("szm %lx\n", sizeof(SimpleTreeMetaNode));
-    printf("szln %lx\n", sizeof(SimpleTreeLeafNode));
+    printf("szln %lx\n", CRYPTO_IV_SIZE + sizeof(SimpleTreeLeafNode) + SIMPLETREE_LEAF_M * (sizeof(SimpleTreeInternalKey) + sizeof(SimpleTreeSmallValue)));
+    printf("szln large %lx\n", CRYPTO_IV_SIZE + sizeof(SimpleTreeLeafNode) + SIMPLETREE_LARGE_LEAF_M * (sizeof(SimpleTreeInternalKey) + sizeof(SimpleTreeValue)));
     printf("szin %lx\n", sizeof(SimpleTreeInnerNode));
     printf("sz %lx\n", sizeof(SimpleTreeNode));
     exit(0);
@@ -210,7 +218,18 @@ static inline SimpleTreeResult simpletree_read(SimpleTree *st,
     const SimpleTreeInternalKey *k = &ln->keys[it->index];
 
     r.key = k->key;
-    r.value = ln->values[it->index];
+
+    if (st->leaf_m == SIMPLETREE_LARGE_LEAF_M) {
+        SimpleTreeValue *values = (SimpleTreeValue *) &ln->keys[st->leaf_m];
+        r.value = values[it->index];
+    } else {
+        SimpleTreeSmallValue *values = (SimpleTreeSmallValue *) &ln->keys[st->leaf_m];
+        SimpleTreeSmallValue value = values[it->index];
+        r.value.chunk = value.chunk;
+        r.value.offset = value.offset;
+        r.value.size = value.size;
+        r.value.hash = value.hash;
+    }
     put_node(st, n);
     return r;
 }

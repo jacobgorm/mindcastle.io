@@ -48,9 +48,10 @@ static void init_tree(SimpleTree *st, Crypto *crypto)
     st->crypto = crypto;
     st->fd = -1;
     st->node_buf = malloc(SIMPLETREE_NODESIZE);
+    st->leaf_m = 0; // set later
 }
 
-void simpletree_create(SimpleTree *st, Crypto *crypto)
+void simpletree_create(SimpleTree *st, Crypto *crypto, int use_large_values)
 {
     assert(st);
     init_tree(st, crypto);
@@ -61,7 +62,13 @@ void simpletree_create(SimpleTree *st, Crypto *crypto)
     SimpleTreeMetaNode *meta = get_meta(st);
     meta->maxLevel = 0;
     meta->first = 0;
-    meta->magic = 0xfedeabe0;
+    if (use_large_values) {
+        st->leaf_m = SIMPLETREE_LARGE_LEAF_M;
+        meta->magic = 0xfedeabe1;
+    } else {
+        st->leaf_m = SIMPLETREE_LEAF_M;
+        meta->magic = 0xfedeabe0;
+    }
     put_node(st, 0);
 }
 
@@ -107,7 +114,11 @@ void simpletree_open(SimpleTree *st, Crypto *crypto, int fd, hash_t hash)
     assert(st->hash.first64);
     meta = get_meta(st);
 
-    if (meta->magic!=0xfedeabe0){
+    if (meta->magic == 0xfedeabe0){
+        st->leaf_m = SIMPLETREE_LEAF_M;
+    } else if (meta->magic == 0xfedeabe1) {
+        st->leaf_m = SIMPLETREE_LARGE_LEAF_M;
+    } else {
         printf("bad magic %x!\n",meta->magic);
     }
 
@@ -129,7 +140,6 @@ void simpletree_open(SimpleTree *st, Crypto *crypto, int fd, hash_t hash)
             put_node(st, n);
         }
     }
-    assert(meta->magic == 0xfedeabe0);
     put_node(st, 0);
 }
 
@@ -300,11 +310,24 @@ simpletree_insert_leaf(SimpleTree *st, SimpleTreeInternalKey key, SimpleTreeValu
     node_t n = st->nodes[0];
     SimpleTreeLeafNode *ln = &get_node(st, n)->u.ln;
     assert(ln);
-    ln->keys[ln->count] = key;
-    ln->values[ln->count] = value;
+    SimpleTreeInternalKey *keys = (SimpleTreeInternalKey *) ln->keys;
+    keys[ln->count] = key;
+
+    if (st->leaf_m == SIMPLETREE_LARGE_LEAF_M) {
+        SimpleTreeValue *values = (SimpleTreeValue *) &keys[st->leaf_m];
+        values[ln->count] = value;
+    } else {
+        SimpleTreeSmallValue *values = (SimpleTreeSmallValue *) &keys[st->leaf_m];
+        SimpleTreeSmallValue *pv = &values[ln->count];
+        pv->chunk = value.chunk;
+        pv->offset = value.offset;
+        pv->size = value.size;
+        pv->hash = value.hash;
+    }
+
     ++(ln->count);
 
-    if (ln->count == SIMPLETREE_LEAF_M) {
+    if (ln->count == st->leaf_m) {
         simpletree_insert_inner(st, 1, key);
         st->prev = st->nodes[0];
         st->nodes[0] = 0;
@@ -337,7 +360,7 @@ void simpletree_finish(SimpleTree *st)
 {
     int i;
     SimpleTreeMetaNode *meta = get_meta(st);
-    assert(meta->magic == 0xfedeabe0);
+    assert(meta->magic == 0xfedeabe0 || meta->magic == 0xfedeabe1);
 
     for (i = 0 ; i < meta->maxLevel; ++i) {
 
@@ -474,7 +497,7 @@ int simpletree_find(SimpleTree *st, uint64_t key, SimpleTreeIterator *it)
 
             SimpleTreeLeafNode *ln = &sn->u.ln;
             pos = lower_bound(st, ln->keys, ln->count, &needle);
-            assert(pos < SIMPLETREE_LEAF_M);
+            assert(pos < st->leaf_m);
 
             if (pos < ln->count) {
                 it->node = n;

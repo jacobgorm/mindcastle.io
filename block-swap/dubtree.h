@@ -60,6 +60,7 @@ typedef struct DubTree {
 
     struct level_ptr first;
 
+    int use_large_values;
     const uint8_t *crypto_key;
     char *fallbacks[DUBTREE_MAX_FALLBACKS + 1];
     char *cache;
@@ -91,6 +92,7 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
 int dubtree_init(DubTree *t, const uint8_t *key,
         chunk_id_t top_id, hash_t top_hash,
         char **fallbacks, char *cache,
+        int use_large_values,
         malloc_callback malloc_cb, free_callback free_cb, void *opaque);
 int dubtree_checkpoint(DubTree *t, chunk_id_t *top_id, hash_t *top_hash);
 void dubtree_close(DubTree *t);

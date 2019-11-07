@@ -9,6 +9,7 @@
 #define SIMPLETREE_NODESIZE 0x8000 /* Same as Windows' paging unit. */
 #define SIMPLETREE_INNER_M 1258 /* Inner node width, squeezed just below 32kB. */
 #define SIMPLETREE_LEAF_M 1090 /* Leaf node width, squeezed just below 32kB. */
+#define SIMPLETREE_LARGE_LEAF_M 962 /* Leaf node width with wider values, squeezed just below 32kB. */
 
 #define CRYPTO_IV_SIZE (96 / 8)
 #define CRYPTO_KEY_SIZE (256 / 8)

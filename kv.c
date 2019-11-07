@@ -157,7 +157,7 @@ int kv_init(struct kv *kv, const char *kvinfo, int delete_on_close) {
     fallbacks[0] = kvdata;
     kv->t = malloc(sizeof(DubTree));
     if (dubtree_init(kv->t, kv->crypto_key, top_id, top_hash, fallbacks, cache,
-                kv_malloc, kv_free, NULL) != 0) {
+                1, kv_malloc, kv_free, NULL) != 0) {
         assert(0);
         return -1;
     }
