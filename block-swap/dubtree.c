@@ -32,8 +32,6 @@
 #define CURL_MAX_READ_SIZE (1<<19)
 #endif
 
-#define DUBTREE_VALUE_SIZE (0xffff)
-
 static dubtree_handle_t prepare_http_get(DubTree *t,
         int synchronous, const char *url, chunk_id_t chunk_id);
 
@@ -306,10 +304,18 @@ static void decrypt_read(void *opaque, int result)
         const uint8_t *hash = ds->hashes;
         uint8_t *dst = ds->buffer;
         const uint8_t *src = ds->buffer;
+
+        uint8_t inline_tmp[0x10000];
+        size_t max_size = 0;
+        for (int i = 0; i < ds->num_keys; ++i) {
+            uint32_t size = ds->sizes[i] - CRYPTO_IV_SIZE;
+            max_size = size > max_size ? size : max_size;
+        }
+        uint8_t *tmp = max_size > sizeof(inline_tmp) ? malloc(max_size) : inline_tmp;
+
         for (int i = 0; i < ds->num_keys; ++i, hash += CRYPTO_TAG_SIZE) {
             uint32_t size = ds->sizes[i];
             if (size > 0) {
-                uint8_t tmp[DUBTREE_VALUE_SIZE];
                 int dsize = decrypt256(ds->crypto, tmp, src + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE, hash, src);
                 if (dsize <= 0) {
                     errx(1, "failed decrypting read, size=%u", size);
@@ -319,6 +325,9 @@ static void decrypt_read(void *opaque, int result)
                 dst += dsize;
                 ds->sizes[i] = dsize;
             }
+        }
+        if (tmp != inline_tmp) {
+            free(tmp);
         }
     }
     ds->cb(ds->opaque, result);
@@ -2022,7 +2031,6 @@ int dubtree_sanity_check(DubTree *t)
         int idx = -1;
         while (!simpletree_at_end(&st, &it)) {
             SimpleTreeResult k;
-            uint8_t in[2 * DUBTREE_VALUE_SIZE];
             chunk_id_t chunk_id;
             int l;
             int got;
@@ -2037,24 +2045,24 @@ int dubtree_sanity_check(DubTree *t)
                 warn("unable to read chunk %"PRIx64, be64toh(chunk_id.id.first64));
                 return -1;
             }
+            uint8_t *in = malloc(k.value.size);
             got = dubtree_pread(cf, in, k.value.size, k.value.offset);
             if (got != k.value.size) {
                 err(1, "dubtree pread failed");
             }
             put_chunk(t, l);
 
-            int sz = k.value.size;
-            if (sz < DUBTREE_VALUE_SIZE) {
 #if 0
-                int unsz = LZ4_decompress_safe((const char*)in, (char*)out,
-                        sz, DUBTREE_BLOCK_SIZE);
-                if (unsz != DUBTREE_BLOCK_SIZE) {
-                    printf("%d vs %d, offset=%u size=%u\n", unsz, sz,
-                            k.value.offset, sz);
-                    return -1;
-                }
-#endif
+            int sz = k.value.size;
+            int unsz = LZ4_decompress_safe((const char*)in, (char*)out,
+                    sz, DUBTREE_BLOCK_SIZE);
+            if (unsz != DUBTREE_BLOCK_SIZE) {
+                printf("%d vs %d, offset=%u size=%u\n", unsz, sz,
+                        k.value.offset, sz);
+                return -1;
             }
+#endif
+            free(in);
 
             simpletree_next(&st, &it);
         }
