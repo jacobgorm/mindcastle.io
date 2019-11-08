@@ -895,7 +895,9 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
 
     uint8_t zero_key[CRYPTO_KEY_SIZE] = {};
     if (!memcmp(zero_key, s->crypto_key, CRYPTO_KEY_SIZE)) {
-        RAND_bytes(s->crypto_key, sizeof(s->crypto_key));
+        if (RAND_priv_bytes(s->crypto_key, sizeof(s->crypto_key)) != 1) {
+            errx(1, "RAND_bytes failed!");
+        }
     }
 
     /* Chop off filename to reveal dir. */

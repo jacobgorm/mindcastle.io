@@ -135,7 +135,9 @@ int kv_init(struct kv *kv, const char *kvinfo, int delete_on_close) {
         free(dup);
     }
     if (!have_key) {
-        RAND_bytes(kv->crypto_key, CRYPTO_KEY_SIZE);
+        if (RAND_priv_bytes(kv->crypto_key, CRYPTO_KEY_SIZE) != 1) {
+            errx(1, "RAND_bytes failed!");
+        }
     }
 
     int r;
