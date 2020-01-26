@@ -1556,29 +1556,42 @@ out:
     }
 }
 
-
-const int min_io_sz = 1 << 18;
-const int max_io_sz = 1 << 22;
-static inline int chunk_exceeded(hash_t hash, size_t size)
+static inline int chunk_exceeded(uint64_t hash, size_t size)
 {
-    const uint64_t mask = ~(~0ULL >> 9ULL);
-    return (((hash.first64 & mask) == mask) && size > min_io_sz) || (size > max_io_sz);
+    int p = __builtin_clzll((uint64_t) size);
+    int q = __builtin_ffsll(hash);
+    /* K is a tunable parameter to affect avg chunk sizes,
+     * increase to make chunks smaller */
+    const int K = 33;
+    return p < q + K;
 }
 
-static inline __uint128_t rol128(__uint128_t a)
+#define HASH_WINDOW 32
+#define HASH_B 33
+struct hash_state {
+    int idx;
+    uint64_t base;
+    uint64_t hash;
+    uint64_t hashes[HASH_WINDOW];
+};
+
+static inline void init_hash(struct hash_state *hs)
 {
-    return (a << 1) | (a >> 127);
+    memset(hs, 0, sizeof(*hs));
+    uint64_t base = 1;
+    for (int i = 1; i < HASH_WINDOW; ++i) {
+        base *= HASH_B;
+    }
+    hs->base = base;
 }
 
-static inline hash_t update_hash(hash_t h1, hash_t h2)
+static inline void update_hash(struct hash_state *hs, uint64_t hash)
 {
-    assert(h2.first64);
-    __uint128_t a = h1.first128;
-    __uint128_t b = h2.first128;
-    hash_t r = { rol128(a) ^ b };
-    return r;
+    int i = hs->idx++ % HASH_WINDOW;
+    uint64_t prev = hs->hashes[i];
+    hs->hashes[i] = hash;
+    hs->hash = HASH_B * (hs->hash - hs->base * prev) + hash;
 }
-
 
 static inline void insert_kv(SimpleTree *st,
         uint64_t key, int chunk, int offset, int size, hash_t hash)
@@ -1764,8 +1777,8 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     /* Create the new B-tree to index the destination level. */
     simpletree_create(&st, &crypto, t->use_large_values);
 
-    hash_t nil_hash = {};
-    hash_t t_hash = nil_hash;
+    struct hash_state hash_state;
+    init_hash(&hash_state);
     uint64_t total = 0;
     int min_idx = 0;
     uint32_t min_offset = 0;
@@ -1790,13 +1803,13 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         int end = 0;
 
         /* Anything to flush from current chunk before we switch to another one? */
-        if (t_buffered && (done || chunk_exceeded(t_hash, t_buffered))) {
+        if (t_buffered && (done || chunk_exceeded(hash_state.hash, t_buffered))) {
 
             write_chunk(t, &ud->chunk_ids[out_chunk], out, encrypted_values, t_buffered);
             out_chunk = -1;
             out = NULL;
             t_buffered = 0;
-            t_hash = nil_hash;
+            init_hash(&hash_state);
 
         }
         if (done) {
@@ -1832,7 +1845,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
                 insert_kv(&st, min->key, out_chunk, t_buffered, min->size, min->hash);
                 t_buffered += min->size;
             }
-            t_hash = update_hash(t_hash, min->hash);
+            update_hash(&hash_state, min->hash.first64);
             total += min->size;
         } else {
             garbage += min->size;
