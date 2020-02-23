@@ -276,24 +276,6 @@ int main(int argc, char **argv)
     }
 
     char *fn = argv[0];
-    struct sigaction sig;
-    sig.sa_handler = signal_handler;
-    sigemptyset(&sig.sa_mask);
-    sig.sa_flags = 0;
-    for (int i = 1; i < 31; ++i) {
-        switch (i) {
-            case SIGHUP:
-            case SIGINT:
-            case SIGCHLD:
-                sigaction(i, &sig, NULL);
-                break;
-            default:
-                /* some versions of linux will disconnect nbd
-                 * if getting signalled, so ignore as many as we can. */
-                signal(i, SIG_IGN);
-                break;
-        }
-    }
 
     printf("opening swapimage %s...\n", fn);
     aio_global_init();
@@ -404,6 +386,26 @@ int main(int argc, char **argv)
     ioh_event_init(&close_event, close_event_cb, &should_close);
     ioh_event_init(&exit_event, close_event_cb, &should_exit);
     ioh_event_init(&flushed_event, close_event_cb, &can_exit);
+
+    struct sigaction sig;
+    sig.sa_handler = signal_handler;
+    sigemptyset(&sig.sa_mask);
+    sig.sa_flags = 0;
+    for (int i = 1; i < 31; ++i) {
+        switch (i) {
+            case SIGHUP:
+            case SIGINT:
+            case SIGCHLD:
+                sigaction(i, &sig, NULL);
+                break;
+            default:
+                /* some versions of linux will disconnect nbd
+                 * if getting signalled, so ignore as many as we can. */
+                signal(i, SIG_IGN);
+                break;
+        }
+    }
+
 
     shell(script, needs_format ? "create" : "open", NULL);
 
