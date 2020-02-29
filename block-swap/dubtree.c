@@ -308,8 +308,10 @@ static void decrypt_read(void *opaque, int result)
         uint8_t inline_tmp[0x10000];
         size_t max_size = 0;
         for (int i = 0; i < ds->num_keys; ++i) {
-            uint32_t size = ds->sizes[i] - CRYPTO_IV_SIZE;
-            max_size = size > max_size ? size : max_size;
+            if (ds->sizes[i] > CRYPTO_IV_SIZE) {
+                uint32_t size = ds->sizes[i] - CRYPTO_IV_SIZE;
+                max_size = size > max_size ? size : max_size;
+            }
         }
         uint8_t *tmp = max_size > sizeof(inline_tmp) ? malloc(max_size) : inline_tmp;
 
