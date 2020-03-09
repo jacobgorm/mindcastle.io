@@ -45,6 +45,10 @@
 
 #include <openssl/rand.h>
 
+#if OPENSSL_VERSION_NUMBER < 0x10101000L
+#define RAND_priv_bytes RAND_bytes
+#endif
+
 #include "aio.h"
 #include "ioh.h"
 //#include "block-int.h"
