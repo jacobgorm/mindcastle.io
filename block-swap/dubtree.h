@@ -85,7 +85,7 @@ void *dubtree_prepare_find(DubTree *t);
 void dubtree_end_find(DubTree *t, void *ctx);
 
 int dubtree_find(DubTree *t, uint64_t start, int num_keys,
-        uint8_t *out, size_t buffer_size,
+        uint8_t *out, size_t *buffer_size,
         uint8_t *map, uint32_t *sizes,
         read_callback cb, void *opaque, void *ctx);
 

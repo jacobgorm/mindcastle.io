@@ -1266,9 +1266,12 @@ static int __swap_dubtree_read(BDRVSwapState *s, SwapAIOCB *acb)
     int retries = 0;
     do {
         r = dubtree_find(&s->t, start, end - start,
-                decomp, decomp_size,
+                decomp, &decomp_size,
                 map, sizes,
                 dubtree_read_complete_cb, acb, s->find_context);
+        if (r == -ENOSPC) {
+            errx(1, "%s: dubtree_find() buffer exceeded!?", __FUNCTION__);
+        }
     } while (r == -EAGAIN && ++retries < 10);
     assert(r >= 0);
 

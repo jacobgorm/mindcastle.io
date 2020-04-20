@@ -776,7 +776,7 @@ void dubtree_end_find(DubTree *t, void *ctx)
 }
 
 int dubtree_find(DubTree *t, uint64_t start, int num_keys,
-        uint8_t *buffer, size_t buffer_size,
+        uint8_t *buffer, size_t *buffer_size,
         uint8_t *map, uint32_t *sizes,
         read_callback cb, void *opaque, void *ctx)
 {
@@ -941,11 +941,11 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
         dst += size;
     }
 
-    if (read_total <= buffer_size) {
+    if (read_total <= *buffer_size) {
         r = flush_reads(t, &c, NULL, 0, cs);
     } else {
-        assert(0); // XXX we lack a proper way to propagate back buffer too small errs
-        r = -1;
+        *buffer_size = read_total;
+        r = -ENOSPC;
     }
     if (r < 0) {
         succeeded = 0;

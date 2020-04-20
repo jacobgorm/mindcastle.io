@@ -164,7 +164,11 @@ int kv_init(struct kv *kv, const char *kvinfo, int delete_on_close) {
         return -1;
     }
     kv->find_context = dubtree_prepare_find(kv->t);
-    kv->b = kv->buffer = malloc(BUFFER_MAX);
+    kv->buffer_size = BUFFER_MAX;
+    kv->b = kv->buffer = malloc(kv->buffer_size);
+    if (!kv->buffer) {
+        errx(1, "%s: unable to alloc kv buffer!", __FUNCTION__);
+    }
     kv->base = ~0ULL;
     return 0;
 }
@@ -238,7 +242,7 @@ int kv_insert(struct kv *kv, uint64_t key, const uint8_t *value, size_t size) {
 
     kv->base = ~0ULL;
 
-    if (kv->b - kv->buffer + size > (BUFFER_MAX) || kv->n == KV_MAX_KEYS) {
+    if (kv->b - kv->buffer + size > BUFFER_MAX || kv->n == KV_MAX_KEYS) {
         kv_flush(kv);
     }
 
@@ -261,13 +265,24 @@ int kv_find(struct kv *kv, uint8_t **rptr, size_t *rsize, uint64_t key) {
 
     uint64_t range = 0x100;
     uint64_t base = key & ~(range - 1ULL);
+    size_t buffer_size = kv->buffer_size;
     if (kv->base != base) {
         kv->base = base;
         kv->last_found = ~0ULL;
         do {
-            r = dubtree_find(kv->t, base, range, kv->buffer, BUFFER_MAX,
+            r = dubtree_find(kv->t, base, range, kv->buffer, &buffer_size,
                     NULL, kv->sizes,
                     io_done, kv, kv->find_context);
+            if (r == -ENOSPC) {
+                free(kv->buffer);
+                kv->buffer_size = buffer_size;
+                kv->buffer = malloc(buffer_size);
+                if (!kv->buffer) {
+                    errx(1, "%s: unable to grow kv buffer to %zu bytes\n",
+                            __FUNCTION__, buffer_size);
+                }
+                continue;
+            }
         } while (r == -EAGAIN);
         wait(kv);
         int offset = 0;

@@ -26,6 +26,7 @@ struct kv {
     int fds[2];
     uint8_t *crypto_key;
     uint8_t *b;
+    size_t buffer_size;
     uint8_t *buffer;
     uint64_t base;
     uint64_t last_found;
