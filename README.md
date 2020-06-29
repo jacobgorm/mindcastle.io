@@ -13,7 +13,7 @@ Bromium's internal ".swap" storage engine, which is the storage component of
 that company's ground-breaking micro-virtualization security technology, and
 has (anecdotally) been used to launch more VMs than Amazon AWS. Today, development
 is sponsored by Vertigo.ai, and the main developer is Jacob Gorm Hansen, who also
-led the work at Bromium.
+led the work at Bromium (which is now part of HP.)
 
 ## Building
 
@@ -22,7 +22,7 @@ To build on debian/ubuntu, you need to install:
 * cmake
 * ninja-build
 * liblz4-dev
-* libcurl4-gnutls-dev (or other libcurl-dev package)
+* libcurl4-gnutls-dev (or other libcurl-dev package, e.g, libcurl4-openssl-dev)
 * uuid-dev
 * libssl-dev
 
