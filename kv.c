@@ -17,14 +17,6 @@
 
 static const int MAX_PENDING = 64; // times 8GiB
 
-static void *kv_malloc(void *_s, size_t sz) {
-    return malloc(sz);
-}
-
-static void kv_free(void *_s, void *b) {
-    free(b);
-}
-
 static void io_done(void *opaque, int ret) {
     char msg;
     struct kv *kv = opaque;
@@ -159,7 +151,7 @@ int kv_init(struct kv *kv, const char *kvinfo, int delete_on_close) {
     fallbacks[0] = kvdata;
     kv->t = malloc(sizeof(DubTree));
     if (dubtree_init(kv->t, kv->crypto_key, top_id, top_hash, fallbacks, cache,
-                1, kv_malloc, kv_free, NULL) != 0) {
+                1, NULL, NULL) != 0) {
         assert(0);
         return -1;
     }

@@ -255,6 +255,8 @@ typedef struct BDRVSwapState {
     volatile int flush;
     volatile int quit;
     volatile int alloced;
+    BlockDriverCompletionFunc *flush_complete_cb;
+    void *flush_opaque;
     void *insert_context;
 
     thread_event write_event;
@@ -264,8 +266,6 @@ typedef struct BDRVSwapState {
     thread_event insert_event;
     thread_event can_insert_event;
     uxen_thread insert_thread;
-
-    ioh_event *quisced_event;
 
     DubTree t;
     void *find_context;
@@ -508,10 +508,16 @@ swap_insert_thread(void * _s)
         swap_free(c->s, c->cbuf);
         free(c);
         load = s->busy_blocks.load;
+        BlockDriverCompletionFunc *cb = s->flush_complete_cb;
+        void *opaque = s->flush_opaque;
+        if (load == 0) {
+            s->flush_complete_cb = NULL;
+            s->flush_opaque = NULL;
+        }
         swap_unlock(s);
 
-        if (load == 0 && s->quisced_event) {
-            ioh_event_set(s->quisced_event);
+        if (load == 0 && cb) {
+            cb(opaque, r);
         }
         if (r < 0) {
             err(1, "dubtree_insert failed, r=%d!", r);
@@ -801,10 +807,15 @@ static int swap_read_header(BDRVSwapState *s)
 
 static int swap_write_header(BDRVSwapState *s)
 {
-    FILE *f = fopen(s->filename, "w");
+    int r = -1;
+    char *tmpfn = NULL;
+    if (asprintf(&tmpfn, "%s.tmp", s->filename) < 0) {
+        goto out;
+    }
+    FILE *f = fopen(tmpfn, "w");
     if (!f) {
         warn("swap: unable to open %s", s->filename);
-        return -1;
+        goto out;
     }
 
     char uuid_str[37];
@@ -833,7 +844,13 @@ static int swap_write_header(BDRVSwapState *s)
     fprintf(f, "snaphash=%s\n", tmp);
 
     fclose(f);
-    return 0;
+    r = rename(tmpfn, s->filename);
+    if (r < 0) {
+        err(1, "renaming %s -> %s failed", tmpfn, s->filename);
+    }
+out:
+    free(tmpfn);
+    return r;
 }
 
 static inline
@@ -854,6 +871,13 @@ char *swap_resolve_via_fallback(BDRVSwapState *s, const char *fn)
         }
     }
     return check;
+}
+
+int swap_commit(void *opaque) {
+    BDRVSwapState *s = (BDRVSwapState *) opaque;
+    dubtree_checkpoint(&s->t, &s->top_id, &s->top_hash);
+    swap_write_header(s);
+    return 0;
 }
 
 int swap_open(BlockDriverState *bs, const char *filename, int flags)
@@ -953,7 +977,7 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
     }
 
     if (dubtree_init(&s->t, s->crypto_key, s->top_id, s->top_hash, s->fallbacks, s->cache,
-                0, swap_malloc, swap_free, s) != 0) {
+                0, swap_commit, s) != 0) {
         warn("swap: failed to init dubtree");
         r = -1;
         goto out;
@@ -1470,7 +1494,6 @@ static int queue_write(BDRVSwapState *s, uint64_t key, uint64_t value)
 {
     HashEntry *e;
 
-    //debug_printf("queue %"PRIx64"\n", key);
     e = hashtable_find_entry(&s->busy_blocks, key);
     if (e) {
         e->value = value;
@@ -1637,7 +1660,8 @@ static int __swap_nonblocking_write(BDRVSwapState *s, const uint8_t *buf,
     return (BlockDriverAIOCB *) acb;
 }
 
-int swap_flush(BlockDriverState *bs, ioh_event *done_event)
+int swap_flush(BlockDriverState *bs, BlockDriverCompletionFunc *cb,
+        void *opaque)
 {
     BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
     LruCache *bc = &s->bc;
@@ -1659,25 +1683,35 @@ int swap_flush(BlockDriverState *bs, ioh_event *done_event)
     //aio_wait_end();
 #endif
 
-    debug_printf("swap: emptying cache lines\n");
     swap_lock(s);
     s->flush = 1;
-    s->quisced_event = done_event;
+    s->flush_complete_cb = cb;
+    s->flush_opaque = opaque;
+    int n = 0;
     for (i = 0; i < (1 << bc->log_lines); ++i) {
         LruCacheLine *cl = &bc->lines[i];
         if (cl->value) {
             hashtable_delete(&s->cached_blocks, (uint64_t) cl->key);
             if (cl->dirty) {
                 queue_write(s, cl->key, cl->value);
+                ++n;
             } else {
                 swap_free(s, (void *) (uintptr_t) cl->value);
             }
         }
         cl->key = 0;
         cl->value = 0;
+        cl->dirty = 0;
     }
-    swap_signal_write(s);
     swap_unlock(s);
+    if (n) {
+        debug_printf("swap: emptying %d cache lines\n", n);
+        swap_signal_write(s);
+    } else {
+        if (cb) {
+            cb(opaque, 0);
+        }
+    }
     return 0;
 }
 

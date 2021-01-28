@@ -149,6 +149,11 @@ static void close_event_cb(void *opaque)
     *pi = 1;
 }
 
+static void flush_complete(void *opaque, int ret) {
+    ioh_event *event = (ioh_event *) opaque;
+    ioh_event_set(event);
+}
+
 static void *disk_swap_thread(void *bs)
 {
     while (!can_exit) {
@@ -234,6 +239,7 @@ int main(int argc, char **argv)
                 exit(1);
             }
         }
+
         t1 = rtc();
         dt = t1 - t0;
         printf("%.1f writes/s, %.2fMiB/s %s\n", ((double)i) / dt,
@@ -277,7 +283,7 @@ int main(int argc, char **argv)
         t0 = t1;
 
     }
-    swap_flush(&bs, &close_event);
+    swap_flush(&bs, flush_complete, &close_event);
     pthread_join(tid, NULL);
     swap_close(&bs);
     printf("test complete\n");

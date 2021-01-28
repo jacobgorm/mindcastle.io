@@ -57,6 +57,11 @@ static void *disk_swap_thread(void *bs)
     return NULL;
 }
 
+static void flush_complete(void *opaque, int ret) {
+    ioh_event *event = (ioh_event *) opaque;
+    ioh_event_set(event);
+}
+
 int main(int argc, char **argv)
 {
 #ifdef _WIN32
@@ -104,7 +109,7 @@ int main(int argc, char **argv)
             break;
         }
     }
-    swap_flush(&bs, &close_event);
+    swap_flush(&bs, flush_complete, &close_event);
     pthread_join(tid, NULL);
     swap_close(&bs);
     printf("primed %lu MiB\n", total / 2);

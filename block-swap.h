@@ -23,7 +23,8 @@ BlockDriverAIOCB *swap_aio_read(BlockDriverState *bs,
         BlockDriverCompletionFunc *cb, void *opaque);
 
 struct ioh_event;
-int swap_flush(BlockDriverState *bs, struct ioh_event *done_event);
+int swap_flush(BlockDriverState *bs, BlockDriverCompletionFunc *cb,
+        void *opaque);
 void swap_close(BlockDriverState *bs);
 int swap_create(const char *filename, int64_t size, int flags);
 int swap_open(BlockDriverState *bs, const char *filename, int flags);

@@ -44,8 +44,7 @@ static inline int equal_chunk_ids(const chunk_id_t *a, const chunk_id_t *b)
 }
 
 typedef void (*read_callback) (void *opaque, int result);
-typedef void *(*malloc_callback) (void *opaque, size_t sz);
-typedef void (*free_callback) (void *opaque, void *ptr);
+typedef int (*commit_callback) (void *opaque);
 
 struct CacheLineUserData;
 
@@ -71,8 +70,7 @@ typedef struct DubTree {
     HashTable refcounts_ht;
     int buffer_max;
     void *buffered;
-    malloc_callback malloc_cb;
-    free_callback free_cb;
+    commit_callback commit_cb;
     void *opaque;
     void *head_ch, *shared_ch;
 
@@ -92,8 +90,7 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
 int dubtree_init(DubTree *t, const uint8_t *key,
         chunk_id_t top_id, hash_t top_hash,
         char **fallbacks, char *cache,
-        int use_large_values,
-        malloc_callback malloc_cb, free_callback free_cb, void *opaque);
+        int use_large_values, commit_callback commit_cb, void *opaque);
 int dubtree_checkpoint(DubTree *t, chunk_id_t *top_id, hash_t *top_hash);
 void dubtree_close(DubTree *t);
 int dubtree_delete(DubTree *t);

@@ -50,7 +50,17 @@ struct read_info {
     struct nbd_reply reply;
 };
 
+struct flush_info {
+    struct client_info *ci;
+    struct nbd_reply reply;
+};
+
 static void got_data(void *opaque);
+
+static BlockDriverState bs;
+static ioh_event exit_event;
+static ioh_event close_event;
+static ioh_event flushed_event;
 
 static inline int safe_read(int fd, void *buf, size_t sz)
 {
@@ -135,9 +145,23 @@ static void nbd_read_done(void *opaque, int ret) {
     free(ri);
 }
 
-static void nbd_write_done(void *opaque, int ret) {
-    uint8_t *buffer = opaque;
+static void nbd_write_done(void *buffer, int ret) {
     free(buffer);
+}
+
+static void nbd_flush_done(void *opaque, int ret) {
+    struct flush_info *fi = opaque;
+    struct client_info *ci = fi->ci;
+    int r = safe_write(ci->sock, &fi->reply, sizeof(fi->reply));
+    if (r != sizeof(fi->reply)) {
+        err(1, "sock write (c) failed");
+    }
+    free(fi);
+}
+
+static void nbd_final_flush_done(void *opaque, int ret) {
+    ioh_event *event = (ioh_event *) opaque;
+    ioh_event_set(event);
 }
 
 static void got_data(void *opaque)
@@ -157,9 +181,12 @@ static void got_data(void *opaque)
             return;
         }
         switch(ntohl(request.type)) {
+
             case NBD_CMD_FLUSH: {
-                printf("got flush\n");
-                assert(0);
+                struct flush_info *fi = malloc(sizeof(struct read_info));
+                fi->ci = ci;
+                fi->reply = reply;
+                swap_flush(ci->bs, nbd_flush_done, fi);
                 break;
             }
 
@@ -183,6 +210,7 @@ static void got_data(void *opaque)
                 swap_aio_read(ci->bs, offset / 512, ri->buffer, len / 512, nbd_read_done, ri);
                 break;
             }
+
             case NBD_CMD_WRITE: {
                 r = safe_write(ci->sock, &reply, sizeof(reply));
                 int len = ntohl(request.len);
@@ -200,8 +228,8 @@ static void got_data(void *opaque)
                 swap_aio_write(ci->bs, offset / 512, buffer, len / 512, nbd_write_done, buffer);
                 break;
             }
+
             case NBD_CMD_TRIM: {
-                printf("got TRIM!\n");
                 r = safe_write(ci->sock, &reply, sizeof(reply));
                 int len = ntohl(request.len);
                 uint64_t offset = be64toh(request.from);
@@ -221,11 +249,6 @@ static void got_data(void *opaque)
         };
     }
 }
-
-static BlockDriverState bs;
-static ioh_event exit_event;
-static ioh_event close_event;
-static ioh_event flushed_event;
 
 static void close_event_cb(void *opaque)
 {
@@ -346,6 +369,11 @@ int main(int argc, char **argv)
                     err(1, "device ioctl (c) failed");
                 }
 
+                r = ioctl(device, NBD_SET_FLAGS, NBD_FLAG_SEND_FLUSH || NBD_FLAG_SEND_TRIM);
+                if (r) {
+                    err(1, "device ioctl (c) failed");
+                }
+
                 r = ioctl(device, NBD_DO_IT);
                 fprintf(stderr, "nbd device terminated %d\n", r);
                 if (r == -1)
@@ -416,7 +444,7 @@ int main(int argc, char **argv)
             should_close = 0;
         }
         if (should_exit) {
-            swap_flush(&bs, &flushed_event);
+            swap_flush(&bs, nbd_final_flush_done, &flushed_event);
             should_exit = 0;
         }
     }

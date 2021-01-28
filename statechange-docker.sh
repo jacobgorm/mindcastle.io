@@ -11,7 +11,7 @@ create)
 open)
     mkfs.xfs $DEVICE 2> /dev/null # will fail if already formatted
     mkdir -p $MNT &&
-    mount -osync $DEVICE $MNT &&
+    mount -oexec,dev,discard $DEVICE $MNT &&
     rsync --chown=root:root -av --delete tmp/ $MNT
     kill -1 $PID
     ;;

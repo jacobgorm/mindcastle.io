@@ -38,8 +38,8 @@ void thread_event_set(thread_event *ev)
 #else
     pthread_mutex_lock(&ev->mutex);
     ev->set = 1;
-    pthread_mutex_unlock(&ev->mutex);
     pthread_cond_signal(&ev->cond);
+    pthread_mutex_unlock(&ev->mutex);
 #endif
 }
 
@@ -50,8 +50,9 @@ void thread_event_wait(thread_event *ev)
     WaitForSingleObject(*ev, INFINITE);
 #else
     pthread_mutex_lock(&ev->mutex);
-    while (!ev->set)
+    while (!ev->set) {
         pthread_cond_wait(&ev->cond, &ev->mutex);
+    }
     ev->set = 0;
     pthread_mutex_unlock(&ev->mutex);
 #endif

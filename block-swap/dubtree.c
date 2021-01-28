@@ -89,22 +89,17 @@ int dubtree_init(DubTree *t, const uint8_t *key,
         chunk_id_t top_id, hash_t top_hash,
         char **fallbacks, char *cache,
         int use_large_values,
-        malloc_callback malloc_cb, free_callback free_cb,
+        commit_callback commit_cb,
         void *opaque)
 {
     int i;
     char *fn;
     char **fb;
 
-    if (!malloc_cb || !free_cb) {
-        return -1;
-    }
-
     memset(t, 0, sizeof(DubTree));
     t->crypto_key = key;
     t->use_large_values = use_large_values;
-    t->malloc_cb = malloc_cb;
-    t->free_cb = free_cb;
+    t->commit_cb = commit_cb;
     t->opaque = opaque;
 
     t->head_ch = curl_easy_init();
@@ -1498,7 +1493,7 @@ void write_chunk(DubTree *t, chunk_id_t *out_id, Chunk *c,
     cs->cb = set_event_cb;
     cs->opaque = (void *) event;
 #else
-    c->buf = t->malloc_cb(t->opaque, size);
+    c->buf = malloc(size);
     if (!c->buf) {
         errx(1, "%s: malloc failed", __FUNCTION__);
     }
@@ -1549,7 +1544,7 @@ void write_chunk(DubTree *t, chunk_id_t *out_id, Chunk *c,
                     __FUNCTION__, be64toh(out_id->id.first64));
         }
     }
-    t->free_cb(t->opaque, c->buf);
+    free(c->buf);
 #endif
 
 out:
@@ -1930,11 +1925,13 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
 
     simpletree_close(&st);
 
-    critical_section_enter(&t->cache_lock);
     struct level_ptr first = {dest, tree_chunk, tree_hash};
     t->first = first;
+    if (t->commit_cb) {
+        t->commit_cb(t->opaque);
+    }
 
-
+    critical_section_enter(&t->cache_lock);
     for (j = i; j >= 0; --j) {
         SimpleTree *st = tree_ptrs[j];
         if (st) {
@@ -1949,8 +1946,8 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
             __free_chunk(t, tree_chunk_ids[j]);
         }
     }
-
     critical_section_leave(&t->cache_lock);
+
     critical_section_leave(&t->write_lock);
     free(deref);
     free(hashes);
