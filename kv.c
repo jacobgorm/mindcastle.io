@@ -58,7 +58,7 @@ static void *kv_insert_thread(void *opaque)
         TAILQ_REMOVE(&kv->insert_queue, kbi, queue_entry);
         pthread_mutex_unlock(&kv->insert_mutex);
 
-        dubtree_insert(kv->t, kbi->n, kbi->keys, kbi->buffer, kbi->sizes, 0);
+        dubtree_insert(kv->t, kbi->n, kbi->keys, kbi->buffer, kbi->sizes, 0, NULL, NULL);
         pthread_mutex_lock(&kv->ready_mutex);
         if (--(kv->num_pending) < MAX_PENDING) {
             pthread_cond_signal(&kv->ready_cond);
@@ -151,7 +151,7 @@ int kv_init(struct kv *kv, const char *kvinfo, int delete_on_close) {
     fallbacks[0] = kvdata;
     kv->t = malloc(sizeof(DubTree));
     if (dubtree_init(kv->t, kv->crypto_key, top_id, top_hash, fallbacks, cache,
-                1, NULL, NULL) != 0) {
+                1) != 0) {
         assert(0);
         return -1;
     }

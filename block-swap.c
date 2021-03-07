@@ -454,6 +454,15 @@ struct insert_context {
     size_t total_size;
 };
 
+static int swap_write_header(BDRVSwapState *s);
+
+static int swap_commit(void *opaque) {
+    BDRVSwapState *s = (BDRVSwapState *) opaque;
+    dubtree_checkpoint(&s->t, &s->top_id, &s->top_hash);
+    swap_write_header(s);
+    return 0;
+}
+
 #ifdef _WIN32
 static DWORD WINAPI
 #else
@@ -489,7 +498,7 @@ swap_insert_thread(void * _s)
         int i;
         uint32_t load;
 
-        r = dubtree_insert(&s->t, n, keys, cbuf, c->sizes, 0);
+        r = dubtree_insert(&s->t, n, keys, cbuf, c->sizes, 0, swap_commit, s);
         free(c->sizes);
 
         swap_lock(s);
@@ -873,13 +882,6 @@ char *swap_resolve_via_fallback(BDRVSwapState *s, const char *fn)
     return check;
 }
 
-int swap_commit(void *opaque) {
-    BDRVSwapState *s = (BDRVSwapState *) opaque;
-    dubtree_checkpoint(&s->t, &s->top_id, &s->top_hash);
-    swap_write_header(s);
-    return 0;
-}
-
 int swap_open(BlockDriverState *bs, const char *filename, int flags)
 {
     memset(bs, 0 , sizeof(*bs));
@@ -977,7 +979,7 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
     }
 
     if (dubtree_init(&s->t, s->crypto_key, s->top_id, s->top_hash, s->fallbacks, s->cache,
-                0, swap_commit, s) != 0) {
+                0) != 0) {
         warn("swap: failed to init dubtree");
         r = -1;
         goto out;
@@ -1827,7 +1829,7 @@ int swap_ioctl(BlockDriverState *bs, unsigned long int req, void *buf)
             return -EINVAL;
         }
         int sl = *((int *) buf);
-        return dubtree_insert(&s->t, 0, NULL, NULL, NULL, sl);
+        return dubtree_insert(&s->t, 0, NULL, NULL, NULL, sl, NULL, NULL);
     } else if (req == 2) {
         return dubtree_sanity_check(&s->t);
     } else if (req == 3) {

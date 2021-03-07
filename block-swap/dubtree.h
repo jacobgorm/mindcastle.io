@@ -70,14 +70,13 @@ typedef struct DubTree {
     HashTable refcounts_ht;
     int buffer_max;
     void *buffered;
-    commit_callback commit_cb;
-    void *opaque;
     void *head_ch, *shared_ch;
 
 } DubTree;
 
-int dubtree_insert(DubTree *t, int numKeys, uint64_t* keys,
-        uint8_t *values, uint32_t *sizes, int force_level);
+int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
+        uint8_t *values, uint32_t *sizes,
+        int force_level, commit_callback commit_cb, void *opaque);
 
 void *dubtree_prepare_find(DubTree *t);
 void dubtree_end_find(DubTree *t, void *ctx);
@@ -90,7 +89,7 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
 int dubtree_init(DubTree *t, const uint8_t *key,
         chunk_id_t top_id, hash_t top_hash,
         char **fallbacks, char *cache,
-        int use_large_values, commit_callback commit_cb, void *opaque);
+        int use_large_values);
 int dubtree_checkpoint(DubTree *t, chunk_id_t *top_id, hash_t *top_hash);
 void dubtree_close(DubTree *t);
 int dubtree_delete(DubTree *t);

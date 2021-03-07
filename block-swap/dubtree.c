@@ -88,9 +88,7 @@ static inline void chunk_ref(DubTree *t, chunk_id_t chunk_id)
 int dubtree_init(DubTree *t, const uint8_t *key,
         chunk_id_t top_id, hash_t top_hash,
         char **fallbacks, char *cache,
-        int use_large_values,
-        commit_callback commit_cb,
-        void *opaque)
+        int use_large_values)
 {
     int i;
     char *fn;
@@ -99,8 +97,6 @@ int dubtree_init(DubTree *t, const uint8_t *key,
     memset(t, 0, sizeof(DubTree));
     t->crypto_key = key;
     t->use_large_values = use_large_values;
-    t->commit_cb = commit_cb;
-    t->opaque = opaque;
 
     t->head_ch = curl_easy_init();
     t->shared_ch = curl_easy_init();
@@ -1635,7 +1631,7 @@ static uint64_t *u64_lower_bound(uint64_t *first, int len, uint64_t key)
 
 int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         uint8_t *values, uint32_t *sizes,
-        int force_level)
+        int force_level, commit_callback commit_cb, void *opaque)
 {
     /* Find a free slot at the top level and copy the key there. */
     SimpleTree st;
@@ -1927,8 +1923,8 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
 
     struct level_ptr first = {dest, tree_chunk, tree_hash};
     t->first = first;
-    if (t->commit_cb) {
-        t->commit_cb(t->opaque);
+    if (commit_cb) {
+        commit_cb(opaque);
     }
 
     critical_section_enter(&t->cache_lock);
