@@ -32,6 +32,7 @@ static FILE *tracefile = NULL;
 static int should_exit = 0;
 static int should_close = 0;
 static int can_exit = 0;
+static int snapshot_requested = 0;
 
 struct sock_info {
     int sock;
@@ -55,11 +56,18 @@ struct flush_info {
     struct nbd_reply reply;
 };
 
+struct snapshot_info {
+    struct BlockDriverState *bs;
+    char *script;
+    int sock;
+};
+
 static void got_data(void *opaque);
 
 static BlockDriverState bs;
 static ioh_event exit_event;
 static ioh_event close_event;
+static ioh_event snapshot_event;
 static ioh_event flushed_event;
 
 static inline int safe_read(int fd, void *buf, size_t sz)
@@ -164,6 +172,23 @@ static void nbd_final_flush_done(void *opaque, int ret) {
     ioh_event_set(event);
 }
 
+static void nbd_snapshot_flush_done(void *opaque, int ret) {
+    struct snapshot_info *si = opaque;
+    (void) si;
+
+    uuid_t uuid;
+    char uuid_str[37];
+    swap_snapshot(si->bs, uuid);
+    tiny_uuid_unparse(uuid, uuid_str);
+
+    aio_resume_wait_object(si->sock);
+
+    setenv("SNAPSHOT_UUID", uuid_str, 1);
+    shell(si->script, "snapshot", NULL);
+    free(si);
+}
+
+
 static void got_data(void *opaque)
 {
     struct client_info *ci = opaque;
@@ -262,6 +287,8 @@ static void signal_handler(int s)
         ioh_event_set(&exit_event);
     } else if (s == SIGHUP) {
         ioh_event_set(&close_event);
+    } else if (s == SIGUSR1) {
+        ioh_event_set(&snapshot_event);
     } else if (s == SIGCHLD) {
         int wstatus;
         wait(&wstatus);
@@ -414,6 +441,7 @@ int main(int argc, char **argv)
     ioh_event_init(&close_event, close_event_cb, &should_close);
     ioh_event_init(&exit_event, close_event_cb, &should_exit);
     ioh_event_init(&flushed_event, close_event_cb, &can_exit);
+    ioh_event_init(&snapshot_event, close_event_cb, &snapshot_requested);
 
     struct sigaction sig;
     sig.sa_handler = signal_handler;
@@ -423,6 +451,7 @@ int main(int argc, char **argv)
         switch (i) {
             case SIGHUP:
             case SIGINT:
+            case SIGUSR1:
             case SIGCHLD:
                 sigaction(i, &sig, NULL);
                 break;
@@ -446,6 +475,16 @@ int main(int argc, char **argv)
         if (should_exit) {
             swap_flush(&bs, nbd_final_flush_done, &flushed_event);
             should_exit = 0;
+        }
+        if (snapshot_requested) {
+            struct snapshot_info *si = malloc(sizeof(struct snapshot_info));
+            si->bs = &bs;
+            si->script = script;
+            si->sock = ci->sock;
+
+            aio_suspend_wait_object(ci->sock);
+            swap_flush(&bs, nbd_snapshot_flush_done, si);
+            snapshot_requested = 0;
         }
     }
     ioctl(device, NBD_DISCONNECT);

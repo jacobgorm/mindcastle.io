@@ -1,6 +1,8 @@
 #ifndef __BLOCK_SWAP_H__
 #define __BLOCK_SWAP_H__
 
+#include "tinyuuid.h"
+
 typedef struct BlockDriverState {
     void *opaque;
     uint64_t total_sectors;
@@ -30,5 +32,6 @@ int swap_create(const char *filename, int64_t size, int flags);
 int swap_open(BlockDriverState *bs, const char *filename, int flags);
 int swap_remove(BlockDriverState *bs);
 int swap_ioctl(BlockDriverState *bs, unsigned long int req, void *buf);
+int swap_snapshot(BlockDriverState *bs, uuid_t uuid);
 
 #endif /* __BLOCK_SWAP_H__ */

@@ -91,6 +91,7 @@ int dubtree_init(DubTree *t, const uint8_t *key,
         char **fallbacks, char *cache,
         int use_large_values);
 int dubtree_checkpoint(DubTree *t, chunk_id_t *top_id, hash_t *top_hash);
+int dubtree_snapshot(DubTree *t, const char *name);
 void dubtree_close(DubTree *t);
 int dubtree_delete(DubTree *t);
 void dubtree_quiesce(DubTree *t);

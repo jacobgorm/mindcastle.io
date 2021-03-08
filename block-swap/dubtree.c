@@ -2081,3 +2081,58 @@ int dubtree_sanity_check(DubTree *t)
     crypto_close(&crypto);
     return 0;
 }
+
+static int link_chunk(chunk_id_t chunk_id, const char *from, const char *to)
+{
+    char *fn = name_chunk(from, chunk_id);
+    char *ln = name_chunk(to, chunk_id);
+    int r = link(fn, ln);
+    if (r < 0 && errno != EEXIST) {
+        warnx("unable to link %s -> %s!", fn, ln);
+    }
+    free(ln);
+    free(fn);
+    return r;
+}
+
+int dubtree_snapshot(DubTree *t, const char *dn)
+{
+    int r;
+
+    r = dubtree_mkdir(dn);
+    if (r < 0) {
+        warnx("unable to create snapshot directory %s, aborting snapshot!", dn);
+        return -1;
+    }
+
+    Crypto crypto;
+    crypto_init(&crypto, t->crypto_key);
+    struct level_ptr next = t->first;
+
+    while (next.level >= 0 && r >= 0) {
+        chunk_id_t chunk_id = next.level_id;
+
+        r = link_chunk(chunk_id, t->fallbacks[0], dn);
+        if (r < 0) {
+            break;
+        }
+
+        SimpleTree st;
+        simpletree_open(&st, &crypto, get_chunk_fd(t, chunk_id),
+                next.level_hash);
+
+        const UserData *cud = simpletree_get_user(&st);
+        for (int i = 0; i < cud->num_chunks; ++i) {
+            chunk_id = cud->chunk_ids[i];
+            r = link_chunk(chunk_id, t->fallbacks[0], dn);
+            if (r < 0) {
+                break;
+            }
+        }
+
+        next = cud->next;
+        simpletree_close(&st);
+    }
+    crypto_close(&crypto);
+    return 0;
+}

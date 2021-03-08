@@ -454,12 +454,12 @@ struct insert_context {
     size_t total_size;
 };
 
-static int swap_write_header(BDRVSwapState *s);
+static int swap_write_header(BDRVSwapState *s, uuid_t uuid, const char *fn);
 
 static int swap_commit(void *opaque) {
     BDRVSwapState *s = (BDRVSwapState *) opaque;
     dubtree_checkpoint(&s->t, &s->top_id, &s->top_hash);
-    swap_write_header(s);
+    swap_write_header(s, s->uuid, s->filename);
     return 0;
 }
 
@@ -814,21 +814,21 @@ static int swap_read_header(BDRVSwapState *s)
     return 0;
 }
 
-static int swap_write_header(BDRVSwapState *s)
+static int swap_write_header(BDRVSwapState *s, uuid_t uuid, const char *fn)
 {
     int r = -1;
     char *tmpfn = NULL;
-    if (asprintf(&tmpfn, "%s.tmp", s->filename) < 0) {
+    if (asprintf(&tmpfn, "%s.tmp", fn) < 0) {
         goto out;
     }
     FILE *f = fopen(tmpfn, "w");
     if (!f) {
-        warn("swap: unable to open %s", s->filename);
+        warn("swap: unable to open %s", tmpfn);
         goto out;
     }
 
     char uuid_str[37];
-    tiny_uuid_unparse(s->uuid, uuid_str);
+    tiny_uuid_unparse(uuid, uuid_str);
     fprintf(f, "uuid=%s\n", uuid_str);
     fprintf(f, "size=%lu\n", s->size);
 
@@ -853,9 +853,9 @@ static int swap_write_header(BDRVSwapState *s)
     fprintf(f, "snaphash=%s\n", tmp);
 
     fclose(f);
-    r = rename(tmpfn, s->filename);
+    r = rename(tmpfn, fn);
     if (r < 0) {
-        err(1, "renaming %s -> %s failed", tmpfn, s->filename);
+        err(1, "renaming %s -> %s failed", tmpfn, fn);
     }
 out:
     free(tmpfn);
@@ -1748,7 +1748,7 @@ void swap_close(BlockDriverState *bs)
     }
     s->flush = 0;
     dubtree_checkpoint(&s->t, &s->top_id, &s->top_hash);
-    swap_write_header(s);
+    swap_write_header(s, s->uuid, s->filename);
     swap_unlock(s);
 
     if (s->find_context) {
@@ -1812,6 +1812,42 @@ int swap_create(const char *filename, int64_t size, int flags)
     if (file)
         fclose(file);
     return ret;
+}
+
+int swap_snapshot(BlockDriverState *bs, uuid_t uuid)
+{
+    BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
+    char uuid_str[37];
+    char *dn, *fn;
+    int r;
+
+    tiny_uuid_generate_random(uuid);
+    tiny_uuid_unparse(uuid, uuid_str);
+
+    r = asprintf(&dn, "swapdata-%s", uuid_str);
+    if (r < 0) {
+        errx(1, "%s: asprintf failed", __FUNCTION__);
+    }
+
+    r = dubtree_snapshot(&s->t, dn);
+    if (r < 0) {
+        warnx("snapshot %s failed", uuid_str);
+        return r;
+    }
+    r = asprintf(&fn, "%s.swap", uuid_str);
+    if (r < 0) {
+        errx(1, "%s: asprintf failed", __FUNCTION__);
+    }
+    if (s->swapdata) {
+        warnx("WARNING: snapshotting disk with swapdata at %s!", s->swapdata);
+    }
+    r = swap_write_header(s, uuid, fn);
+    if (r < 0) {
+        warnx("failed to write header %s", fn);
+    }
+    free(dn);
+    free(fn);
+    return r;
 }
 
 

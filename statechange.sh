@@ -22,6 +22,10 @@ open)
     (mkdir -p $MNT && mount -oexec,dev,discard $DEVICE $MNT) || (rm -rf $MNT; kill -2 $PID)
     ;;
 
+snapshot)
+    echo $DEVICE was snapshotted to UUID $SNAPSHOT_UUID
+    ;;
+
 close)
     umount $MNT && rm -rf $MNT && kill -2 $PID
     ;;

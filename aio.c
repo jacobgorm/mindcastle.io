@@ -18,6 +18,7 @@ typedef struct AioEntry {
     int fd;
     void (*cb) (void *opaque);
     void *opaque;
+    int suspended;
 } AioEntry;
 
 static AioEntry aios[16];
@@ -87,6 +88,29 @@ void aio_add_wait_object(int fd, void (*cb) (void *opaque), void *opaque) {
         if (e->fd == -1 && __sync_bool_compare_and_swap(&e->fd, -1, fd)) {
             e->cb = cb;
             e->opaque = opaque;
+            e->suspended = 0;
+            return;
+        }
+    }
+    assert(0);
+}
+
+void aio_suspend_wait_object(int fd) {
+    for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
+        AioEntry *e = &aios[i];
+        if (e->fd == fd) {
+            __sync_bool_compare_and_swap(&e->suspended, 0, 1);
+            return;
+        }
+    }
+    assert(0);
+}
+
+void aio_resume_wait_object(int fd) {
+    for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
+        AioEntry *e = &aios[i];
+        if (e->fd == fd) {
+            __sync_bool_compare_and_swap(&e->suspended, 1, 0);
             return;
         }
     }
@@ -168,7 +192,7 @@ void aio_wait(void) {
     for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
         AioEntry *e = &aios[i];
         int fd = e->fd;
-        if (fd >= 0) {
+        if (fd >= 0 && !e->suspended) {
             max = fd > max ? fd : max;
             FD_SET(fd, &readset);
         }
