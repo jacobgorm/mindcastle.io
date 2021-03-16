@@ -32,6 +32,47 @@
 #define CURL_MAX_READ_SIZE (1<<19)
 #endif
 
+static inline ssize_t safe_pread(int fd, void *buf, size_t sz, off_t offset)
+{
+    uint8_t *b = buf;
+    size_t left = sz;
+    while (left) {
+        ssize_t r;
+        do {
+            r = pread(fd, b, left, offset);
+        } while (r < 0 && errno == EINTR);
+        if (r < 0) {
+            err(1, "%s: pread() failed", __FUNCTION__);
+        } else if (r == 0) {
+            break;
+        }
+        left -= r;
+        b += r;
+    }
+    return sz - left;
+}
+
+static inline ssize_t safe_pwrite(int fd, const void *buf, size_t sz, off_t offset)
+{
+    const uint8_t *b = buf;
+    size_t left = sz;
+    while (left) {
+        ssize_t r;
+        do {
+            r = pwrite(fd, b, left, offset);
+        } while (r < 0 && errno == EINTR);
+        if (r < 0) {
+            err(1, "%s pwrite() failed", __FUNCTION__);
+        } else if (r == 0) {
+            break;
+        }
+        left -= r;
+        b += r;
+    }
+    return sz - left;
+}
+
+
 static dubtree_handle_t prepare_http_get(DubTree *t,
         int synchronous, const char *url, chunk_id_t chunk_id);
 
@@ -382,7 +423,7 @@ typedef struct {
     uint32_t split;
     uint32_t offset;
     critical_section lock; /* protects members below */
-    uint8_t *buffer;
+    int is_buffering;
     int num_blocked;
     int num_unblocked;
     struct {
@@ -457,11 +498,15 @@ static int execute_reads(DubTree *t,
     if (hgs) {
         int resolved = 0;
         critical_section_enter(&hgs->lock);
-        if (hgs->buffer) {
+        if (hgs->is_buffering) {
             if (hgs->active && reads_inside_buffer(hgs, first, n)) {
                 for (i = 0, rd = first; i < n; ++i, ++rd) {
-                    memcpy(dst + rd->dst_offset, hgs->buffer + rd->src_offset,
-                            rd->size);
+                    ssize_t got = safe_pread(hgs->fd, dst + rd->dst_offset,
+                            rd->size, rd->src_offset);
+                    if (got != rd->size) {
+                        err(1, "%s: pread() failed", __FUNCTION__);
+                    }
+
                 }
                 free(first);
             } else {
@@ -650,42 +695,6 @@ static int flush_reads(DubTree *t, Chunk *c, const uint8_t *chunk0, int local, C
     c->n_crs = 0;
     c->crs = NULL;
     return r;
-}
-
-
-static inline void *map_file(dubtree_handle_t f, uint32_t sz, int writable)
-{
-    void *m;
-
-#ifdef _WIN32
-    HANDLE h = CreateFileMappingA(f, NULL, writable ? PAGE_READWRITE : PAGE_READONLY, 0, sz, NULL);
-    if (!h) {
-        Werr(1, "CreateFileMappingA fails");
-    }
-    m = MapViewOfFile(h, FILE_MAP_READ, 0, 0, sz);
-    assert(m);
-    CloseHandle(h);
-#else
-    m = mmap(NULL, sz, PROT_READ | (writable ? PROT_WRITE : 0), writable ? MAP_SHARED : MAP_PRIVATE, f->fd, 0);
-    if (m == MAP_FAILED) {
-        err(1, "unable to map file fd=%d,sz=%u %s:%d", f->fd, sz,  __FUNCTION__, __LINE__);
-    }
-#endif
-    return m;
-}
-
-static inline void unmap_file(void *mem, size_t size)
-{
-#ifdef _WIN32
-    if (!UnmapViewOfFile(mem)) {
-        printf("UnmapViewOfFile failed, err=%u\n", (uint32_t) GetLastError());
-    }
-#else
-    int r = munmap(mem, size);
-    if (r < 0) {
-        err(1, "unmap_file");
-    }
-#endif
 }
 
 static int __get_chunk_fd(DubTree *t, chunk_id_t chunk_id)
@@ -1124,6 +1133,33 @@ static chunk_id_t content_id(const uint8_t *in, int size)
     return chunk_id;
 }
 
+static chunk_id_t file_content_id(int fd, size_t size)
+{
+    uint8_t tmp[512 / 8];
+    chunk_id_t result;
+    SHA512_CTX ctx;
+    SHA512_Init(&ctx);
+    off_t offset = 0;
+    for (;;) {
+        uint8_t buffer[0x10000];
+        size_t left = size - offset;
+        size_t take = left < sizeof(buffer) ? left : sizeof(buffer);
+        ssize_t got = safe_pread(fd, buffer, take, offset);
+        if (got > 0) {
+            SHA512_Update(&ctx, buffer, got);
+            offset += got;
+        } else if (got < 0) {
+            err(1, "%s: pread() failed", __FUNCTION__);
+        } else if (got < sizeof(buffer)) {
+            break;
+        }
+    }
+    SHA512_Final(tmp, &ctx);
+    memcpy(result.id.bytes, tmp, sizeof(result.id.bytes));
+    result.size = size;
+    return result;
+}
+
 static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
 {
     //printf("%s %lu\n", __FUNCTION__, (int) size *nmemb);
@@ -1132,7 +1168,10 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
     HttpGetState *hgs = opaque;
     critical_section_enter(&hgs->lock);
 
-    memcpy(hgs->buffer + hgs->offset, ptr, size * nmemb);
+    size_t wrote = safe_pwrite(hgs->fd, ptr, size * nmemb, hgs->offset);
+    if (wrote != size * nmemb) {
+        err(1, "%s: pwrite failed", __FUNCTION__);
+    }
     hgs->offset += size * nmemb;
 
     if ((hgs->offset == hgs->size) || (hgs->offset == hgs->split)) {
@@ -1145,30 +1184,22 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
             aio_add_curl_handle(ch);
         } else {
             fprintf(stderr, "%s %.2fMiB/s\n", hgs->url, (double) (hgs->size) / (1024.0 * 1024.0 * (rtc() - hgs->t0)));
-            void *b = hgs->buffer;
-            char procfn[32];
-            sprintf(procfn, "/proc/self/fd/%d", hgs->fd);
-            chunk_id_t real_id = content_id(b, hgs->chunk_id.size);
+            DubTree *t = hgs->t;
+            if (t->cache) {
+                char procfn[32];
+                sprintf(procfn, "/proc/self/fd/%d", hgs->fd);
+                chunk_id_t real_id = file_content_id(hgs->fd, hgs->chunk_id.size);
 
-            if (equal_chunk_ids(&real_id, &hgs->chunk_id)) {
-                DubTree *t = hgs->t;
-                if (t->cache) {
+                if (equal_chunk_ids(&real_id, &hgs->chunk_id)) {
                     char *fn = name_chunk(t->cache, hgs->chunk_id);
-#if 0
-                    r = msync(hgs->buffer, hgs->size, MS_SYNC);
-                    if (r < 0) {
-                        err(1, "msync failed for %d\n", hgs->fd);
-                    }
-#endif
                     r = linkat(AT_FDCWD, procfn, AT_FDCWD, fn, AT_SYMLINK_FOLLOW);
                     if (r < 0 && errno != EEXIST) {
                         warn("linkat failed for %d -> %s", hgs->fd, fn);
                     }
                     free(fn);
+                } else {
+                    fprintf(stderr, "chunk damaged in transit, not caching!!\n");
                 }
-                close(hgs->fd);
-            } else {
-                fprintf(stderr, "chunk damaged in transit, not caching!!\n");
             }
             hgs->active = 0;
             done = 1;
@@ -1183,7 +1214,12 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
             if (done || reads_inside_buffer(hgs, first, n)) {
                 Read *rd = first;
                 for (int j = 0; j < n; ++j, ++rd) {
-                    memcpy(hgs->blocked_reads[i].dst + rd->dst_offset, hgs->buffer + rd->src_offset, rd->size);
+                    size_t got = safe_pread(hgs->fd,
+                            hgs->blocked_reads[i].dst + rd->dst_offset,
+                            rd->size, rd->src_offset);
+                    if (got != rd->size) {
+                        err(1, "%s: pread failed", __FUNCTION__);
+                    }
                 }
                 hgs->blocked_reads[i].first = NULL;
                 decrement_counter(hgs->blocked_reads[i].cs);
@@ -1194,8 +1230,9 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
     }
 
     if (done) {
-        unmap_file(hgs->buffer, hgs->size);
-        hgs->buffer = NULL;
+        hgs->is_buffering = 0;
+        close(hgs->fd);
+        hgs->fd = -1;
     }
     critical_section_leave(&hgs->lock);
 
@@ -1224,7 +1261,7 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
     }
     HttpGetState *hgs = calloc(1, sizeof(*hgs));
     critical_section_init(&hgs->lock);
-    fprintf(stderr, "fetching %s s=%d...\n", url, synchronous);
+    fprintf(stderr, "fetching %s sz=%u s=%d...\n", url, chunk_id.size, synchronous);
     hgs->t0 = rtc();
     hgs->chunk_id = chunk_id;
     hgs->size = chunk_id.size;
@@ -1232,7 +1269,7 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
     hgs->t = t;
     hgs->url = strdup(url);
     dubtree_set_file_size(f, hgs->size);
-    hgs->buffer = map_file(f, hgs->size, 1);
+    hgs->is_buffering = 1;
     hgs->fd = dup(f->fd);
     f->opaque = hgs_ref(hgs);
 
