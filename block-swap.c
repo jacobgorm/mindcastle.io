@@ -66,8 +66,6 @@
 #include <errno.h>
 #endif
 
-#include <uuid/uuid.h>
-
 #include "block-swap.h"
 #include "block-swap/dubtree_io.h"
 #include "block-swap/dubtree.h"

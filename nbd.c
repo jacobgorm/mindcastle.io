@@ -17,7 +17,6 @@
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <uuid/uuid.h>
 
 #include "config.h"
 #include "aio.h"
