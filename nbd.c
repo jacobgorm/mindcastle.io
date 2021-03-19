@@ -363,8 +363,9 @@ int main(int argc, char **argv)
 
                 r = ioctl(device, NBD_DO_IT);
                 fprintf(stderr, "nbd device terminated %d\n", r);
-                if (r == -1)
+                if (r == -1) {
                     fprintf(stderr, "%s\n", strerror(errno));
+                }
                 ioctl(device, NBD_CLEAR_QUE);
                 ioctl(device, NBD_CLEAR_SOCK);
                 exit(0);
