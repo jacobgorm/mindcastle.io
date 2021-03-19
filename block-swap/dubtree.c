@@ -9,6 +9,7 @@
 #include "lz4.h"
 #include "hex.h"
 #include "rtc.h"
+#include "safeio.h"
 
 /* These must go last or they will mess with e.g. asprintf() */
 #include <curl/curl.h>
@@ -31,47 +32,6 @@
 #ifndef CURL_MAX_READ_SIZE
 #define CURL_MAX_READ_SIZE (1<<19)
 #endif
-
-static inline ssize_t safe_pread(int fd, void *buf, size_t sz, off_t offset)
-{
-    uint8_t *b = buf;
-    size_t left = sz;
-    while (left) {
-        ssize_t r;
-        do {
-            r = pread(fd, b, left, offset);
-        } while (r < 0 && errno == EINTR);
-        if (r < 0) {
-            err(1, "%s: pread() failed", __FUNCTION__);
-        } else if (r == 0) {
-            break;
-        }
-        left -= r;
-        b += r;
-    }
-    return sz - left;
-}
-
-static inline ssize_t safe_pwrite(int fd, const void *buf, size_t sz, off_t offset)
-{
-    const uint8_t *b = buf;
-    size_t left = sz;
-    while (left) {
-        ssize_t r;
-        do {
-            r = pwrite(fd, b, left, offset);
-        } while (r < 0 && errno == EINTR);
-        if (r < 0) {
-            err(1, "%s pwrite() failed", __FUNCTION__);
-        } else if (r == 0) {
-            break;
-        }
-        left -= r;
-        b += r;
-    }
-    return sz - left;
-}
-
 
 static dubtree_handle_t prepare_http_get(DubTree *t,
         int synchronous, const char *url, chunk_id_t chunk_id);
@@ -1806,6 +1766,13 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     }
 
     /* Create the new B-tree to index the destination level. */
+    // XXX we could know min and max values here and pass to tree to
+    // allow it to set its addressed range.
+    //
+    // or we could (perhaps dynamically) decided to insert a radix node in front of
+    // the tree, which would split the address space down to a managable size
+    //
+    //
     simpletree_create(&st, &crypto, t->use_large_values);
 
     struct hash_state hash_state;

@@ -10,6 +10,7 @@
 #include <errno.h>
 
 #include "ioh.h"
+#include "safeio.h"
 
 static int event_fds[2];
 
@@ -30,7 +31,7 @@ void ioh_event_set(ioh_event *event) {
     assert(event->cb);
     if (__sync_bool_compare_and_swap(&event->state, 0, 1)) {
         uintptr_t e = (uintptr_t) event;
-        int r = write(event_fds[1], &e, sizeof(e));
+        int r = safe_write(event_fds[1], &e, sizeof(e));
         if (r != sizeof(e)) {
             err(1, "%s:%d r %d %d:%s\n", __FUNCTION__, __LINE__, r, errno, strerror(errno));
         }
@@ -51,7 +52,7 @@ void ioh_event_clear(ioh_event *event) {
 void ioh_service(void) {
     for (;;) {
         uintptr_t e;
-        int r2 = read(ioh_fd(), &e, sizeof(e));
+        int r2 = safe_read(ioh_fd(), &e, sizeof(e));
         if (r2 != sizeof(e)) {
             if (errno == EWOULDBLOCK || errno == EAGAIN) {
                 return;
