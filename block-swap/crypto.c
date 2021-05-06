@@ -56,7 +56,7 @@ int encrypt256(Crypto *crypto, uint8_t *ciphertext, uint8_t *tag,
     ciphertext_len += len;
     
     if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, CRYPTO_TAG_SIZE, tag) != 1) {
-        errx(1, "EVP_EncryptFinal_ex failed");
+        errx(1, "EVP_CIPHER_CTX_ctrl failed");
     }
 
     return ciphertext_len;
