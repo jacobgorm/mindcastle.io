@@ -312,12 +312,13 @@ static void decrypt_read(void *opaque, int result)
             if (size > 0) {
                 int dsize = decrypt256(ds->crypto, tmp, src + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE, hash, src);
                 if (dsize <= 0) {
-                    errx(1, "failed decrypting read, size=%u", size);
+                    warnx("failed decrypting read, size=%u, dsize=%d", size, dsize);
+                } else {
+                    memcpy(dst, tmp, dsize);
                 }
-                memcpy(dst, tmp, dsize);
                 src += size;
                 dst += dsize;
-                ds->sizes[i] = dsize;
+                ds->sizes[i] = dsize > 0 ? dsize : 0;
             }
         }
         if (tmp != inline_tmp) {
