@@ -1660,9 +1660,8 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     uint8_t *encrypted_values = malloc(total_size);
     uint8_t *enc = encrypted_values;
     uint8_t *hashes = malloc(CRYPTO_TAG_SIZE * num_keys);
-    uint8_t *hash = hashes;
     const uint8_t *v = values;
-    for (i = 0; i < num_keys; ++i, hash += CRYPTO_TAG_SIZE) {
+    for (i = 0; i < num_keys; ++i) {
         int size = sizes[i];
         //RAND_bytes(enc, CRYPTO_IV_SIZE);
         //SHA512(v, size, tmp); // XXX use key to make this HMAC
@@ -1676,7 +1675,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         memcpy(enc, tmp, CRYPTO_IV_SIZE);
 #endif
         sizes[i] = CRYPTO_IV_SIZE + encrypt256(&crypto, enc + CRYPTO_IV_SIZE,
-                hash, v, size, enc);
+                &hashes[CRYPTO_TAG_SIZE * i], v, size, enc);
         assert(t->use_large_values || sizes[i] < (1<<16));
         v += size;
         enc += sizes[i];
@@ -1692,7 +1691,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         min->level = -1;
         min->key = keys[0];
         min->size = sizes[0];
-        memcpy(&min->hash, &hashes[0], CRYPTO_TAG_SIZE);
+        memcpy(&min->hash, hashes, CRYPTO_TAG_SIZE);
         heap[j] = min;
         sift_up(t, heap, j++);
     }
@@ -1847,8 +1846,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
             simpletree_next(min->st, &min->it);
             end = simpletree_at_end(min->st, &min->it);
         } else {
-            min_offset += sizes[min_idx++];
-            end = (min_idx == num_keys);
+            end = (min_idx == num_keys - 1);
         }
         if (end) {
             if (j == 1) {
@@ -1868,6 +1866,7 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
                 min->size = k.value.size;
                 min->hash = k.value.hash;
             } else {
+                min_offset += sizes[min_idx++];
                 min->key = keys[min_idx];
                 min->offset = min_offset;
                 min->size = sizes[min_idx];
