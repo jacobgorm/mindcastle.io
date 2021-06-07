@@ -72,7 +72,7 @@ static inline int chunk_deref(DubTree *t, chunk_id_t chunk_id)
     if (e) {
         return --(e->value);
     }
-    assert(0);
+    errx(1, "trying to deref chunk not in hashtable");
     return -1;
 }
 
@@ -226,16 +226,16 @@ static inline void read_chunk(DubTree *t, Chunk *d, chunk_id_t chunk_id,
         hashtable_insert(&d->ht, chunk_id.id.first64, n);
     }
 
-    int n = cr->num_reads;
+    int n = cr->num_reads++;
     if (!((n - 1) & n)) {
         /* XXX we do this once per find(). */
         cr->reads = realloc(cr->reads, sizeof(cr->reads[0]) * (n ? 2 * n: 1));
         if (!cr->reads) {
-            errx(1, "%s: malloc failed line %d", __FUNCTION__, __LINE__);
+            errx(1, "%s: realloc failed line %d", __FUNCTION__, __LINE__);
         }
     }
 
-    rd = &cr->reads[cr->num_reads++];
+    rd = &cr->reads[n];
     rd->src_offset = src_offset;
     rd->dst_offset = dst_offset;
     rd->size = size;
@@ -397,7 +397,7 @@ typedef struct {
         CallbackState *cs;
         uint8_t *dst;
         Read *first;
-        int n; } blocked_reads[MAX_BLOCKED_READS];
+        int n; } *blocked_reads;
 } HttpGetState;
 
 static inline HttpGetState *hgs_ref(HttpGetState *hgs) {
@@ -409,6 +409,7 @@ static inline void hgs_deref(HttpGetState *hgs) {
     if (--(hgs->refcount) == 0) {
         critical_section_free(&hgs->lock);
         free(hgs->url);
+        free(hgs->blocked_reads);
         free(hgs);
     }
 }
@@ -487,12 +488,17 @@ static int execute_reads(DubTree *t,
                     hgs->active = 1;
                 }
                 increment_counter(cs);
-                int num_blocked = hgs->num_blocked++;
-                assert(num_blocked < MAX_BLOCKED_READS); //XXX
-                hgs->blocked_reads[num_blocked].cs = cs;
-                hgs->blocked_reads[num_blocked].dst = dst;
-                hgs->blocked_reads[num_blocked].first = first;
-                hgs->blocked_reads[num_blocked].n = n;
+                int nb = hgs->num_blocked++;
+                if (!((nb - 1) & nb)) {
+                    hgs->blocked_reads = realloc(hgs->blocked_reads, sizeof(hgs->blocked_reads[0]) * (nb ? 2 * nb: 1));
+                    if (!hgs->blocked_reads) {
+                        errx(1, "%s: realloc failed line %d", __FUNCTION__, __LINE__);
+                    }
+                }
+                hgs->blocked_reads[nb].cs = cs;
+                hgs->blocked_reads[nb].dst = dst;
+                hgs->blocked_reads[nb].first = first;
+                hgs->blocked_reads[nb].n = n;
             }
             resolved = 1;
         }
