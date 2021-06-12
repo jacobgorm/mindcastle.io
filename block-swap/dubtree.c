@@ -2089,7 +2089,7 @@ static int link_chunk(chunk_id_t chunk_id, const char *from, const char *to)
     char *ln = name_chunk(to, chunk_id);
     int r = link(fn, ln);
     if (r < 0 && errno != EEXIST) {
-        warnx("unable to link %s -> %s!", fn, ln);
+        warn("unable to link %s -> %s!", fn, ln);
     }
     free(ln);
     free(fn);
