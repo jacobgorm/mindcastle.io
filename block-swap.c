@@ -1822,9 +1822,15 @@ int swap_snapshot(BlockDriverState *bs, uuid_t uuid)
     tiny_uuid_generate_random(uuid);
     tiny_uuid_unparse(uuid, uuid_str);
 
-    r = asprintf(&dn, "swapdata-%s", uuid_str);
+    r = dubtree_mkdir("snapshots");
+    if (r < 0 && errno != EEXIST) {
+        warn("unable to create snapshots directory");
+        return -1;
+    }
+
+    r = asprintf(&dn, "snapshots/swapdata-%s", uuid_str);
     if (r < 0) {
-        errx(1, "%s: asprintf failed", __FUNCTION__);
+        errx(1, "%s:%d asprintf failed", __FUNCTION__, __LINE__);
     }
 
     r = dubtree_snapshot(&s->t, dn);
@@ -1832,7 +1838,7 @@ int swap_snapshot(BlockDriverState *bs, uuid_t uuid)
         warnx("snapshot %s failed", uuid_str);
         return r;
     }
-    r = asprintf(&fn, "%s.swap", uuid_str);
+    r = asprintf(&fn, "snapshots/%s.swap", uuid_str);
     if (r < 0) {
         errx(1, "%s: asprintf failed", __FUNCTION__);
     }
@@ -1843,8 +1849,8 @@ int swap_snapshot(BlockDriverState *bs, uuid_t uuid)
     if (r < 0) {
         warnx("failed to write header %s", fn);
     }
-    free(dn);
     free(fn);
+    free(dn);
     return r;
 }
 
