@@ -188,11 +188,17 @@ typedef struct ChunkReads {
 } ChunkReads;
 
 typedef struct Chunk {
-    void *buf;
     HashTable ht;
     int n_crs;
     ChunkReads *crs;
 } Chunk;
+
+void clear_chunk(Chunk *c) {
+    hashtable_clear(&c->ht);
+    free(c->crs);
+    c->n_crs = 0;
+    c->crs = NULL;
+}
 
 static inline void read_chunk(DubTree *t, Chunk *d, chunk_id_t chunk_id,
         uint32_t dst_offset, uint32_t src_offset,
@@ -615,7 +621,8 @@ static int flush_chunk(DubTree *t, uint8_t *dst, dubtree_handle_t f,
     return r;
 }
 
-static int flush_reads(DubTree *t, Chunk *c, const uint8_t *chunk0, int local, CallbackState *cs)
+static int flush_reads(DubTree *t, const Chunk *c, void *buf,
+        const uint8_t *chunk0, int local, CallbackState *cs)
 {
     int i, j;
     int r = 0;
@@ -627,7 +634,7 @@ static int flush_reads(DubTree *t, Chunk *c, const uint8_t *chunk0, int local, C
             Read *first = cr->reads;
             Read *rd;
             for (j = 0, rd = first; j < cr->num_reads; ++j, ++rd) {
-                memcpy(c->buf + rd->dst_offset, chunk0 + rd->src_offset,
+                memcpy(buf + rd->dst_offset, chunk0 + rd->src_offset,
                        rd->size);
             }
             free(first);
@@ -639,7 +646,7 @@ static int flush_reads(DubTree *t, Chunk *c, const uint8_t *chunk0, int local, C
 
             f = get_chunk(t, cr->chunk_id, 0, local, &l);
             if (valid_handle(f)) {
-                r = flush_chunk(t, c->buf, f, cr, cs);
+                r = flush_chunk(t, buf, f, cr, cs);
                 put_chunk(t, l);
             } else {
                 free(cr->reads);
@@ -650,11 +657,6 @@ static int flush_reads(DubTree *t, Chunk *c, const uint8_t *chunk0, int local, C
             }
         }
     }
-
-    hashtable_clear(&c->ht);
-    free(c->crs);
-    c->n_crs = 0;
-    c->crs = NULL;
     return r;
 }
 
@@ -884,7 +886,6 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
 
     /* Copy out the values we found. */
     Chunk c = {};
-    c.buf = buffer;
     hashtable_init(&c.ht, NULL, NULL);
 
     int dst;
@@ -903,7 +904,8 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
     }
 
     if (read_total <= *buffer_size) {
-        r = flush_reads(t, &c, NULL, 0, cs);
+        r = flush_reads(t, &c, buffer, NULL, 0, cs);
+        clear_chunk(&c);
     } else {
         *buffer_size = read_total;
         r = -ENOSPC;
@@ -1430,13 +1432,15 @@ static inline void __free_chunk(DubTree *t, chunk_id_t chunk_id)
     }
 }
 
-void write_chunk(DubTree *t, chunk_id_t *out_id, Chunk *c,
+void write_chunk(DubTree *t, chunk_id_t *out_id, const Chunk *c,
         const uint8_t *chunk0, uint32_t size)
 {
     /* If copying everything in a chunk, we can just return its id. */
     int i, j;
     int total = 0;
+    int l = -1;
     chunk_id_t *first_chunk_id = &c->crs[0].chunk_id;
+
     for (i = 0; i < c->n_crs; ++i) {
         ChunkReads *cr = &c->crs[i];
         if (!equal_chunk_ids(&cr->chunk_id, first_chunk_id)) {
@@ -1457,16 +1461,9 @@ void write_chunk(DubTree *t, chunk_id_t *out_id, Chunk *c,
             free(first);
         }
         *out_id = *first_chunk_id;
-
-        hashtable_clear(&c->ht);
-        free(c->crs);
-        c->n_crs = 0;
-        c->crs = NULL;
-        return;
+        goto out;
     }
 
-
-    int l = -1;
     CallbackState *cs = calloc(1, sizeof(*cs));
     if (!cs) {
         errx(1, "%s: calloc failed", __FUNCTION__);
@@ -1480,15 +1477,15 @@ void write_chunk(DubTree *t, chunk_id_t *out_id, Chunk *c,
     if (!h) {
         Werr(1, "CreateFileMappingA fails");
     }
-    c->buf = MapViewOfFile(h, FILE_MAP_WRITE, 0, 0, size);
+    void *buf = MapViewOfFile(h, FILE_MAP_WRITE, 0, 0, size);
     CloseHandle(h);
 
     HANDLE event = CreateEvent(NULL, TRUE, FALSE, NULL);
     cs->cb = set_event_cb;
     cs->opaque = (void *) event;
 #else
-    c->buf = malloc(size);
-    if (!c->buf) {
+    void *buf = malloc(size);
+    if (!buf) {
         errx(1, "%s: malloc failed", __FUNCTION__);
     }
     int fds[2];
@@ -1500,7 +1497,7 @@ void write_chunk(DubTree *t, chunk_id_t *out_id, Chunk *c,
     cs->opaque = (void *) (intptr_t) fds[1];
 #endif
 
-    flush_reads(t, c, chunk0, 1, cs);
+    flush_reads(t, c, buf, chunk0, 1, cs);
     decrement_counter(cs);
 
 #ifdef _WIN32
@@ -1515,7 +1512,7 @@ void write_chunk(DubTree *t, chunk_id_t *out_id, Chunk *c,
         }
     }
     CloseHandle(event);
-    UnmapViewOfFile(c->buf);
+    UnmapViewOfFile(buf);
 #else
     char msg;
     r = read(fds[0], &msg, sizeof(msg));
@@ -1523,7 +1520,7 @@ void write_chunk(DubTree *t, chunk_id_t *out_id, Chunk *c,
         err(1, "pipe read failed");
     }
     close(fds[0]);
-    *out_id = content_id(c->buf, size);
+    *out_id = content_id(buf, size);
     dubtree_handle_t f = get_chunk(t, *out_id, 1, 0, &l);
     if (invalid_handle(f)) {
         if (errno == EEXIST) {
@@ -1533,16 +1530,15 @@ void write_chunk(DubTree *t, chunk_id_t *out_id, Chunk *c,
             goto out;
         }
     } else {
-        if (dubtree_pwrite(f, c->buf, size, 0) != size) {
+        if (dubtree_pwrite(f, buf, size, 0) != size) {
             err(1, "%s: dubtree_pwrite to chunk %"PRIx64" failed",
                     __FUNCTION__, be64toh(out_id->id.first64));
         }
     }
-    free(c->buf);
+    free(buf);
 #endif
 
 out:
-    free(c);
     if (l >= 0) {
         put_chunk(t, l);
     }
@@ -1783,9 +1779,11 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     uint32_t min_offset = 0;
 
     int done;
-    Chunk *out = NULL;
-    int out_chunk = -1;
     int *deref = NULL;
+
+    int out_chunk = -1;
+    Chunk out = {};
+    hashtable_init(&out.ht, NULL, NULL);
     
     if (old_ud) {
         deref = calloc(old_ud->num_chunks, sizeof(int));
@@ -1804,9 +1802,9 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         /* Anything to flush from current chunk before we switch to another one? */
         if (t_buffered && (done || chunk_exceeded(hash_state.hash, t_buffered))) {
 
-            write_chunk(t, &ud->chunk_ids[out_chunk], out, encrypted_values, t_buffered);
+            write_chunk(t, &ud->chunk_ids[out_chunk], &out, encrypted_values, t_buffered);
+            clear_chunk(&out);
             out_chunk = -1;
-            out = NULL;
             t_buffered = 0;
             init_hash(&hash_state);
 
@@ -1831,16 +1829,10 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
                 }
                 insert_kv(&st, min->key, chunk, min->offset, min->size, min->hash);
             } else {
-                if (!out) {
-                    out = calloc(1, sizeof(Chunk));
-                    if (!out) {
-                        warnx("%s: calloc failed on line %d",
-                                __FUNCTION__, __LINE__);
-                        return -1;
-                    }
+                if (out_chunk < 0) {
                     out_chunk = add_chunk_id(&ud);
                 }
-                read_chunk(t, out, min->chunk_id, t_buffered, min->offset, min->size);
+                read_chunk(t, &out, min->chunk_id, t_buffered, min->offset, min->size);
                 insert_kv(&st, min->key, out_chunk, t_buffered, min->size, min->hash);
                 t_buffered += min->size;
             }
@@ -1954,7 +1946,6 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     free(hashes);
     free(encrypted_values);
     crypto_close(&crypto);
-
     return 0;
 }
 
