@@ -18,7 +18,7 @@
 static const int MAX_PENDING = 64; // times 8GiB
 
 static void io_done(void *opaque, int ret) {
-    char msg;
+    char msg = 0;
     struct kv *kv = opaque;
     int r = write(kv->fds[1], &msg, sizeof(msg));
     if (r != 1) {

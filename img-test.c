@@ -125,7 +125,7 @@ static inline void seq(uint64_t *s, uint32_t *l, int align)
 static int fds[2];
 
 static void io_done(void *opaque, int ret) {
-    char msg;
+    char msg = 0;
     int r = write(fds[1], &msg, sizeof(msg));
     if (r != 1) {
         err(1, "write() failed\n");
