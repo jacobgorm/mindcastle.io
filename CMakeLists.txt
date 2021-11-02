@@ -37,9 +37,6 @@ install(TARGETS swap
 add_executable(mindcastle nbd.c)
 target_link_libraries(mindcastle swap -lpthread -llz4 ${OPENSSL_LIBRARIES} ${CURL_LIBRARIES})
 
-add_executable(htest htest.c mt19937-64.c)
-target_link_libraries(htest swap -lpthread -llz4 ${OPENSSL_LIBRARIES} ${CURL_LIBRARIES})
-
 add_executable(img-test img-test.c mt19937-64.c)
 target_link_libraries(img-test swap -lpthread -llz4 ${OPENSSL_LIBRARIES} ${CURL_LIBRARIES})
 
