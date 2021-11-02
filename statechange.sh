@@ -4,6 +4,7 @@
 # It interacts with the nbd.c server by means of signals:
 #  signal 1 (SIGHUP) : trigger close
 #  signal 2 (SIGINT) : trigger clean exit
+#  signal 3 (SIGQUIT) : trigger snapshot
 #
 # If you need to create open a device, then load some files into it, and
 # then flush and close, you can put this functionality in the open) handler,

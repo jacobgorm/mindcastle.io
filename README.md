@@ -112,6 +112,16 @@ Where PID is that of the first mindcastle process, you should see this logged
 by the script on startup. See the statechange.sh script comments for more
 details.
 
+## Creating snapshots
+You can cause mindcastle the device to be snapshotted with:
+```bash
+kill -3 PID
+```
+
+The snapshot will appear as a separate .swap file with a new UUID, and an
+accompanying directory. This file and directory contain hardlinks to the
+snapshotted disk, so can be used independently of it.
+
 ## Using with docker
 
 We normally use mindcastle as for broadcasting VMs or container images authored
