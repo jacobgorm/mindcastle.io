@@ -8,6 +8,9 @@
 #include "lrucache.h"
 
 typedef uint32_t node_t;
+typedef int (*read_node_callback) (node_t n, uint8_t *dst, void *opaque);
+typedef void (*close_callback) (void *opaque);
+typedef int (*write_tree_callback) (void *mem, size_t size, void *opaque);
 
 typedef struct SimpleTreeMetaNode {
     node_t root;        /* root node offset */
@@ -29,7 +32,6 @@ typedef struct SimpleTree {
     node_t nodes[16];
     node_t prev;
     uint8_t *mem;
-    int fd;
     uint8_t *node_buf;
     uint8_t *user_data;
     uint64_t size;
@@ -42,7 +44,10 @@ typedef struct SimpleTree {
     LruCache lru;
     HashTable ht;
     uint8_t *cached_nodes;
-
+    read_node_callback read_node_cb;
+    close_callback close_cb;
+    write_tree_callback write_tree_cb;
+    void *opaque;
 } SimpleTree;
 
 typedef struct SimpleTreeInternalKey {
@@ -111,17 +116,20 @@ typedef struct SimpleTreeNode {
     } u;
 } SimpleTreeNode;
 
-void simpletree_create(SimpleTree *st, Crypto *crypto, int use_large_values);
+void simpletree_create(SimpleTree *st, Crypto *crypto, int use_large_values,
+        write_tree_callback write_tree_cb, void *opaque);
 void *simpletree_get_node(SimpleTree *st, node_t n, hash_t hash);
 void simpletree_put_node(SimpleTree *st, node_t n);
 
+hash_t simpletree_commit_and_close(SimpleTree *st);
 void simpletree_close(SimpleTree *st);
 void simpletree_insert(SimpleTree *st, uint64_t key, SimpleTreeValue v);
 void simpletree_finish(SimpleTree *st);
 hash_t simpletree_encrypt(SimpleTree *st);
 int simpletree_find(SimpleTree *st, uint64_t key, SimpleTreeIterator *it);
 
-void simpletree_open(SimpleTree *st, Crypto *crypto, int fd, hash_t hash);
+void simpletree_open(SimpleTree *st, Crypto *crypto, hash_t hash,
+        read_node_callback read_node_cb, close_callback close_cb, void *opaque);
 void simpletree_set_user(SimpleTree *st, const void *data, size_t size);
 const void *simpletree_get_user(SimpleTree *st);
 

@@ -33,17 +33,54 @@
 #define CURL_MAX_READ_SIZE (1<<19)
 #endif
 
-static dubtree_handle_t prepare_http_get(DubTree *t,
-        int synchronous, const char *url, chunk_id_t chunk_id);
-
 static void __put_chunk(DubTree *t, int line);
 static void put_chunk(DubTree *t, int line);
 static dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id,
                                        int dirty, int local, int *l);
 static dubtree_handle_t get_chunk(DubTree *t, chunk_id_t chunk_id,
                                      int dirty, int local, int *l);
-static int __get_chunk_fd(DubTree *t, chunk_id_t chunk_id);
-static int get_chunk_fd(DubTree *t, chunk_id_t chunk_id);
+
+struct CallbackState;
+struct Read;
+
+typedef struct {
+    chunk_id_t chunk_id;
+    int refcount;
+    double t0;
+    DubTree *t;
+    char *url;
+    int active;
+    int synchronous;
+    int size;
+    int fd;
+    uint32_t split;
+    uint32_t offset;
+    critical_section lock; /* protects members below */
+    int is_buffering;
+    int num_blocked;
+    int num_unblocked;
+    uint8_t *dst;
+    struct {
+        struct CallbackState *cs;
+        uint8_t *dst;
+        struct Read *first;
+        int n; } *blocked_reads;
+} HttpGetState;
+
+static inline HttpGetState *hgs_ref(HttpGetState *hgs) {
+    ++(hgs->refcount);
+    return hgs;
+}
+
+static inline void hgs_deref(HttpGetState *hgs) {
+    if (--(hgs->refcount) == 0) {
+        critical_section_free(&hgs->lock);
+        free(hgs->url);
+        free(hgs->blocked_reads);
+        free(hgs);
+    }
+}
+
 static chunk_id_t content_id(const uint8_t *in, int size);
 
 typedef struct CacheLineUserData {
@@ -84,6 +121,83 @@ static inline void chunk_ref(DubTree *t, chunk_id_t chunk_id)
     } else {
         hashtable_insert(&t->refcounts_ht, chunk_id.id.first64, 1);
     }
+}
+
+static int sync_http_range_get(DubTree *t, dubtree_handle_t f,
+        uint8_t *dst, off_t offset, size_t size);
+
+static void put_chunk(DubTree *t, int line);
+static void __put_chunk(DubTree *t, int line);
+
+struct read_node_ctx {
+    DubTree *t;
+    chunk_id_t chunk;
+    int lock_cache;
+    dubtree_handle_t f;
+    int line;
+};
+
+static int read_node(node_t n, uint8_t *dst, void *opaque)
+{
+    struct read_node_ctx *ctx = opaque;
+    DubTree *t = ctx->t;
+    dubtree_handle_t f = ctx->f;
+    assert(f != DUBTREE_INVALID_HANDLE);
+
+    int r;
+    if (f->fd >= 0) {
+        r = dubtree_pread(f, dst, SIMPLETREE_NODESIZE, SIMPLETREE_NODESIZE * n);
+    } else {
+        r = sync_http_range_get(t, f, dst,
+                SIMPLETREE_NODESIZE * n, SIMPLETREE_NODESIZE);
+        assert(r >= 0);
+    }
+
+    return 0;
+}
+
+static inline void init_read_node_ctx(struct read_node_ctx *ctx,
+        DubTree *t, chunk_id_t chunk, int lock_cache)
+{
+    ctx->t = t;
+    ctx->chunk = chunk;
+    ctx->lock_cache = lock_cache;
+
+    if (lock_cache) {
+        ctx->f = get_chunk(t, chunk, 0, 1, &ctx->line);
+    } else {
+        ctx->f = __get_chunk(t, chunk, 0, 1, &ctx->line);
+    }
+    assert(ctx->f != DUBTREE_INVALID_HANDLE);
+}
+
+static void close_tree(void *opaque)
+{
+    struct read_node_ctx *ctx = opaque;
+    DubTree *t = ctx->t;
+    if (ctx->lock_cache) {
+        put_chunk(t, ctx->line);
+    } else {
+        __put_chunk(t, ctx->line);
+    }
+}
+
+static int write_tree(void *mem, size_t size, void *opaque)
+{
+    DubTree *t = opaque;
+
+    t->tree_chunk = content_id(mem, size);
+    int l;
+    dubtree_handle_t f = get_chunk(t, t->tree_chunk, 1, 0, &l);
+    if (invalid_handle(f)) {
+        err(1, "unable to open tree chunk %"PRIx64" for write", t->tree_chunk.id.first64);
+        return -1;
+    }
+    if (dubtree_pwrite(f, mem, size, 0) != size) {
+        err(1, "%s: dubtree_pwrite failed", __FUNCTION__);
+    }
+    put_chunk(t, l);
+    return 0;
 }
 
 int dubtree_init(DubTree *t, const uint8_t *key,
@@ -137,11 +251,14 @@ int dubtree_init(DubTree *t, const uint8_t *key,
 
     t->first.level = -1;
 
+
     if (valid_chunk_id(&top_id)) {
         SimpleTree st;
         Crypto crypto;
         crypto_init(&crypto, t->crypto_key);
-        simpletree_open(&st, &crypto, __get_chunk_fd(t, top_id), top_hash);
+        struct read_node_ctx ctx;
+        init_read_node_ctx(&ctx, t, top_id, 0);
+        simpletree_open(&st, &crypto, top_hash, read_node, close_tree, &ctx);
         const UserData *cud = simpletree_get_user(&st);
         t->first.level = cud->level;
 
@@ -152,8 +269,9 @@ int dubtree_init(DubTree *t, const uint8_t *key,
 
         while (next.level >= 0) {
             SimpleTree st;
-            simpletree_open(&st, &crypto, __get_chunk_fd(t, next.level_id),
-                    next.level_hash);
+            struct read_node_ctx ctx;
+            init_read_node_ctx(&ctx, t, next.level_id, 0);
+            simpletree_open(&st, &crypto, next.level_hash, read_node, close_tree, &ctx);
             const UserData *cud = simpletree_get_user(&st);
             for (int j = 0; j < cud->num_chunks; ++j) {
                 chunk_ref(t, cud->chunk_ids[j]);
@@ -376,43 +494,6 @@ static void CALLBACK read_complete_scatter(DWORD rc, DWORD got, OVERLAPPED *o)
 #endif
 
 #define MAX_BLOCKED_READS 256
-
-typedef struct {
-    chunk_id_t chunk_id;
-    int refcount;
-    double t0;
-    DubTree *t;
-    char *url;
-    int active;
-    int synchronous;
-    int size;
-    int fd;
-    uint32_t split;
-    uint32_t offset;
-    critical_section lock; /* protects members below */
-    int is_buffering;
-    int num_blocked;
-    int num_unblocked;
-    struct {
-        CallbackState *cs;
-        uint8_t *dst;
-        Read *first;
-        int n; } *blocked_reads;
-} HttpGetState;
-
-static inline HttpGetState *hgs_ref(HttpGetState *hgs) {
-    ++(hgs->refcount);
-    return hgs;
-}
-
-static inline void hgs_deref(HttpGetState *hgs) {
-    if (--(hgs->refcount) == 0) {
-        critical_section_free(&hgs->lock);
-        free(hgs->url);
-        free(hgs->blocked_reads);
-        free(hgs);
-    }
-}
 
 static inline int reads_inside_buffer(const HttpGetState *hgs, const Read *first, int n)
 {
@@ -666,27 +747,6 @@ static int flush_reads(DubTree *t, const Chunk *c, void *buf,
     return r;
 }
 
-static int __get_chunk_fd(DubTree *t, chunk_id_t chunk_id)
-{
-    int line = -1;
-    dubtree_handle_t f = __get_chunk(t, chunk_id, 0, 1, &line);
-    if (invalid_handle(f)) {
-        assert(0);
-        return -1;
-    }
-    int r = dup(f->fd);
-    __put_chunk(t, line);
-    return r;
-}
-
-static int get_chunk_fd(DubTree *t, chunk_id_t chunk_id)
-{
-    critical_section_enter(&t->cache_lock);
-    int r = __get_chunk_fd(t, chunk_id);
-    critical_section_leave(&t->cache_lock);
-    return r;
-}
-
 static inline int add_chunk_id(UserData **pud)
 {
     UserData *ud = *pud;
@@ -704,6 +764,7 @@ static inline int add_chunk_id(UserData **pud)
 
 typedef struct CachedTree {
     struct SimpleTree st;
+    struct read_node_ctx ctx;
     chunk_id_t chunk;
 } CachedTree;
 
@@ -838,8 +899,8 @@ int dubtree_find(DubTree *t, uint64_t start, int num_keys,
         }
         if (next.level == i && !st) {
             st = &ct->st;
-            simpletree_open(st, &fx->crypto, __get_chunk_fd(t, next.level_id),
-                    next.level_hash);
+            init_read_node_ctx(&ct->ctx, t, next.level_id, 0);
+            simpletree_open(st, &fx->crypto, next.level_hash, read_node, close_tree, &ct->ctx);
             ct->chunk = next.level_id;
         }
 
@@ -962,6 +1023,7 @@ out:
 
 typedef struct {
     SimpleTree *st;
+    struct read_node_ctx ctx;
     SimpleTreeIterator it;
     int level;
     uint64_t key;
@@ -1208,8 +1270,8 @@ static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
     return size * nmemb;
 }
 
-static dubtree_handle_t prepare_http_get(DubTree *t,
-        int synchronous, const char *url, chunk_id_t chunk_id)
+static dubtree_handle_t prepare_async_http_get(DubTree *t,
+        const char *url, chunk_id_t chunk_id)
 {
     curl_easy_setopt(t->head_ch, CURLOPT_URL, url);
     curl_easy_setopt(t->head_ch, CURLOPT_NOBODY, 1);
@@ -1230,29 +1292,90 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
     }
     HttpGetState *hgs = calloc(1, sizeof(*hgs));
     critical_section_init(&hgs->lock);
-    fprintf(stderr, "fetching %s sz=%u s=%d...\n", url, chunk_id.size, synchronous);
+    fprintf(stderr, "async fetching %s sz=%u...\n", url, chunk_id.size);
     hgs->t0 = rtc();
     hgs->chunk_id = chunk_id;
     hgs->size = chunk_id.size;
-    hgs->synchronous = synchronous;
+    hgs->synchronous = 0;
     hgs->t = t;
     hgs->url = strdup(url);
     dubtree_set_file_size(f, hgs->size);
     hgs->is_buffering = 1;
     hgs->fd = dup(f->fd);
     f->opaque = hgs_ref(hgs);
-
-    if (synchronous) {
-        prep_curl_handle(t->shared_ch, hgs->url, NULL, hgs_ref(hgs));
-        r = curl_easy_perform(t->shared_ch);
-        if (r != CURLE_OK) {
-            errx(1, "unable to fetch %s, %s!", url, curl_easy_strerror(r));
-        }
-    }
     return f;
 }
 
-static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int dirty, int local, int *l)
+static dubtree_handle_t prepare_sync_http_get(DubTree *t,
+        const char *url, chunk_id_t chunk_id)
+{
+    curl_easy_setopt(t->head_ch, CURLOPT_URL, url);
+    curl_easy_setopt(t->head_ch, CURLOPT_NOBODY, 1);
+    CURLcode r = curl_easy_perform(t->head_ch);
+    if (r != CURLE_OK) {
+        warn("unable to HEAD %s, %s!", url, curl_easy_strerror(r));
+        return DUBTREE_INVALID_HANDLE;
+    }
+    int response;
+    curl_easy_getinfo(t->head_ch, CURLINFO_RESPONSE_CODE, &response);
+    if (response != 200) {
+        return DUBTREE_INVALID_HANDLE;
+    }
+
+    HttpGetState *hgs = calloc(1, sizeof(*hgs));
+    critical_section_init(&hgs->lock);
+    fprintf(stderr, "fetching sync %s sz=%u...\n", url, chunk_id.size);
+    hgs->t0 = rtc();
+    hgs->chunk_id = chunk_id;
+    hgs->size = chunk_id.size;
+    hgs->synchronous = 1;
+    hgs->t = t;
+    hgs->url = strdup(url);
+    hgs->is_buffering = 0;
+    hgs->fd = -1;
+    dubtree_handle_t f = calloc(sizeof(dubtree_handle_t), 1);
+    f->fd = -1;
+    f->opaque = hgs;
+    return f;
+}
+
+static size_t sync_curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
+{
+    HttpGetState *hgs = opaque;
+    memcpy(hgs->dst, ptr, size * nmemb);
+    hgs->dst += size * nmemb;
+    return size * nmemb;
+}
+
+static int sync_http_range_get(DubTree *t, dubtree_handle_t f,
+        uint8_t *dst, off_t offset, size_t size)
+{
+    CURL *ch = t->shared_ch;
+    HttpGetState *hgs = f->opaque;
+    assert(hgs);
+    char ranges[32];
+    sprintf(ranges, "%zu-%zu", offset, offset + size - 1);
+    prep_curl_handle(ch, hgs->url, ranges, hgs_ref(hgs));
+
+    hgs->dst = dst;
+    curl_easy_setopt(ch, CURLOPT_URL, hgs->url);
+    curl_easy_setopt(ch, CURLOPT_BUFFERSIZE, CURL_MAX_READ_SIZE);
+    curl_easy_setopt(ch, CURLOPT_WRITEDATA, hgs);
+    curl_easy_setopt(ch, CURLOPT_SOCKOPTFUNCTION, curl_sockopt_cb);
+    curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, sync_curl_data_cb);
+    curl_easy_setopt(ch, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(ch, CURLOPT_RANGE, ranges);
+    //curl_easy_setopt(ch, CURLOPT_VERBOSE, 1);
+
+    int r = curl_easy_perform(ch);
+    if (r != CURLE_OK) {
+        errx(1, "unable to fetch %s, %s!", hgs->url, curl_easy_strerror(r));
+    }
+    return r;
+}
+
+static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id,
+        int dirty, int synchronous, int *l)
 {
     dubtree_handle_t f = DUBTREE_INVALID_HANDLE;
     uint64_t line;
@@ -1287,7 +1410,11 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
                 }
             } else {
                 if (!memcmp("http://", fn, 7) || !memcmp("https://", fn, 8)) {
-                    f = prepare_http_get(t, local, fn, chunk_id);
+                    if (synchronous) {
+                        f = prepare_sync_http_get(t, fn, chunk_id);
+                    } else {
+                        f = prepare_async_http_get(t, fn, chunk_id);
+                    }
                 } else {
                     f = dubtree_open_existing_readonly(fn);
                 }
@@ -1341,11 +1468,12 @@ static inline dubtree_handle_t __get_chunk(DubTree *t, chunk_id_t chunk_id, int 
     return f;
 }
 
-static dubtree_handle_t get_chunk(DubTree *t, chunk_id_t chunk_id, int dirty, int local, int *l)
+static dubtree_handle_t get_chunk(DubTree *t, chunk_id_t chunk_id,
+        int dirty, int synchronous, int *l)
 {
     dubtree_handle_t f;
     critical_section_enter(&t->cache_lock);
-    f = __get_chunk(t, chunk_id, dirty, local, l);
+    f = __get_chunk(t, chunk_id, dirty, synchronous, l);
     critical_section_leave(&t->cache_lock);
     return f;
 }
@@ -1382,7 +1510,7 @@ static int unlink_chunk(DubTree *t, chunk_id_t chunk_id, dubtree_handle_t f)
     return 0;
 }
 
-static inline void __put_chunk(DubTree *t, int line)
+static void __put_chunk(DubTree *t, int line)
 {
     LruCacheLine *cl = &t->lru.lines[line];
     assert(cl->users > 0);
@@ -1710,9 +1838,11 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         uint64_t used = 0;
         if (next.level == i) {
             SimpleTreeResult k;
+
+            min = &tuples[j];
             existing = &trees[i];
-            simpletree_open(existing, &crypto, get_chunk_fd(t, next.level_id),
-                    next.level_hash);
+            init_read_node_ctx(&min->ctx, t, next.level_id, 1);
+            simpletree_open(existing, &crypto, next.level_hash, read_node, close_tree, &min->ctx);
             cud = simpletree_get_user(existing);
 
             tree_ptrs[cud->level] = existing;
@@ -1727,7 +1857,6 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
                 needed += used - garbage;
             }
 
-            min = &tuples[j];
             min->level = i;
             min->st = existing;
             simpletree_begin(existing, &min->it);
@@ -1772,11 +1901,11 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     // XXX we could know min and max values here and pass to tree to
     // allow it to set its addressed range.
     //
-    // or we could (perhaps dynamically) decided to insert a radix node in front of
+    // or we could (perhaps dynamically) decide to insert a radix node in front of
     // the tree, which would split the address space down to a managable size
     //
     //
-    simpletree_create(&st, &crypto, t->use_large_values);
+    simpletree_create(&st, &crypto, t->use_large_values, write_tree, t);
 
     struct hash_state hash_state;
     init_hash(&hash_state);
@@ -1907,24 +2036,9 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
     simpletree_set_user(&st, ud, ud_size(ud, ud->num_chunks));
     free(ud);
 
-    uint32_t tree_size = simpletree_get_nodes_size(&st);
-    hash_t tree_hash = simpletree_encrypt(&st);
-    chunk_id_t tree_chunk = content_id(st.mem, tree_size);
-    int l;
-    dubtree_handle_t f = get_chunk(t, tree_chunk, 1, 0, &l);
-    if (invalid_handle(f)) {
-        err(1, "unable to open tree chunk %"PRIx64" for write", tree_chunk.id.first64);
-        return -1;
-    }
-    if (dubtree_pwrite(f, st.mem, tree_size, 0) != tree_size) {
-        err(1, "%s: dubtree_pwrite failed", __FUNCTION__);
-    }
-    put_chunk(t, l);
+    hash_t tree_hash = simpletree_commit_and_close(&st);
 
-
-    simpletree_close(&st);
-
-    struct level_ptr first = {dest, tree_chunk, tree_hash};
+    struct level_ptr first = {dest, t->tree_chunk, tree_hash};
     t->first = first;
     if (commit_cb) {
         commit_cb(opaque);
@@ -1965,8 +2079,9 @@ int dubtree_delete(DubTree *t)
 
         chunk_id_t chunk_id = next.level_id;
         SimpleTree st;
-        simpletree_open(&st, &crypto, get_chunk_fd(t, chunk_id),
-                next.level_hash);
+        struct read_node_ctx ctx;
+        init_read_node_ctx(&ctx, t, chunk_id, 1);
+        simpletree_open(&st, &crypto, next.level_hash, read_node, close_tree, &ctx);
 
         const UserData *cud = simpletree_get_user(&st);
         for (int i = 0; i < cud->num_chunks; ++i) {
@@ -2034,7 +2149,9 @@ int dubtree_sanity_check(DubTree *t)
         const UserData *cud;
 
         printf("get level %d\n", i);
-        simpletree_open(&st, &crypto, get_chunk_fd(t, next.level_id), next.level_hash);
+        struct read_node_ctx ctx;
+        init_read_node_ctx(&ctx, t, next.level_id, 1);
+        simpletree_open(&st, &crypto, next.level_hash, read_node, close_tree, &ctx);
         simpletree_begin(&st, &it);
         cud = simpletree_get_user(&st);
         printf("check level %d\n", i);
@@ -2124,8 +2241,9 @@ int dubtree_snapshot(DubTree *t, const char *dn)
         }
 
         SimpleTree st;
-        simpletree_open(&st, &crypto, get_chunk_fd(t, chunk_id),
-                next.level_hash);
+        struct read_node_ctx ctx;
+        init_read_node_ctx(&ctx, t, chunk_id, 1);
+        simpletree_open(&st, &crypto, next.level_hash, read_node, close_tree, &ctx);
 
         const UserData *cud = simpletree_get_user(&st);
         for (int i = 0; i < cud->num_chunks; ++i) {

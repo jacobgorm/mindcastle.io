@@ -46,15 +46,17 @@ static void init_tree(SimpleTree *st, Crypto *crypto)
 {
     memset(st, 0, sizeof(*st));
     st->crypto = crypto;
-    st->fd = -1;
     st->node_buf = malloc(SIMPLETREE_NODESIZE);
     st->leaf_m = 0; // set later
 }
 
-void simpletree_create(SimpleTree *st, Crypto *crypto, int use_large_values)
+void simpletree_create(SimpleTree *st, Crypto *crypto, int use_large_values,
+        write_tree_callback write_tree_cb, void *opaque)
 {
     assert(st);
     init_tree(st, crypto);
+    st->write_tree_cb = write_tree_cb;
+    st->opaque = opaque;
 
     alloc_node(st);
     set_node_type(st, 0, SimpleTreeNode_Meta);
@@ -77,14 +79,24 @@ void simpletree_close(SimpleTree *st)
     free(st->mem);
     free(st->user_data);
     free(st->node_buf);
+    st->node_buf = NULL;
     free(st->cached_nodes);
     if (st->is_encrypted) {
         lru_cache_close(&st->lru);
         hashtable_clear(&st->ht);
     }
-    if (st->fd >= 0) {
-        close(st->fd);
+    if (st->close_cb) {
+        st->close_cb(st->opaque);
     }
+}
+
+hash_t simpletree_commit_and_close(SimpleTree *st)
+{
+    size_t size = simpletree_get_nodes_size(st);
+    hash_t hash = simpletree_encrypt(st);
+    st->write_tree_cb(st->mem, size, st->opaque);
+    simpletree_close(st);
+    return hash;
 }
 
 static inline int user_fits_inline(size_t size) {
@@ -97,19 +109,24 @@ static inline size_t user_num_nodes(size_t size) {
     return (size + nsz - 1) / nsz;
 }
 
-void simpletree_open(SimpleTree *st, Crypto *crypto, int fd, hash_t hash)
+void simpletree_open(SimpleTree *st, Crypto *crypto, hash_t hash,
+        read_node_callback read_node_cb,
+        close_callback close_cb, void *opaque)
 {
     assert(hash.first64);
     SimpleTreeMetaNode *meta;
     init_tree(st, crypto);
     st->hash = hash;
     st->mem = NULL;
-    st->fd = fd;
     st->is_encrypted = 1;
     const int log_lines = 6;
     lru_cache_init(&st->lru, log_lines);
     hashtable_init(&st->ht, NULL, NULL);
     st->cached_nodes = malloc(SIMPLETREE_NODESIZE * (1 << log_lines));
+
+    st->read_node_cb = read_node_cb;
+    st->close_cb = close_cb;
+    st->opaque = opaque;
 
     assert(st->hash.first64);
     meta = get_meta(st);
@@ -145,27 +162,12 @@ void simpletree_open(SimpleTree *st, Crypto *crypto, int fd, hash_t hash)
 
 static int buffer_node(SimpleTree *st, node_t n, uint8_t *dst, hash_t hash)
 {
-    int left = SIMPLETREE_NODESIZE;
-    int offset = 0;
-    while (left) {
-        ssize_t r;
-        do {
-            r = pread(st->fd, st->node_buf + offset, left,
-                    SIMPLETREE_NODESIZE * n + offset);
-        } while (r < 0 && errno == EINTR);
-        if (r < 0) {
-            err(1, "unable to read node %u", n);
-        }
-        assert(r != 0);
-        left -= r;
-        offset += r;
-    }
-
+    st->read_node_cb(n, st->node_buf, st->opaque);
     assert(hash.first64);
     int r = decrypt256(st->crypto, dst, st->node_buf + CRYPTO_IV_SIZE,
             SIMPLETREE_NODESIZE - CRYPTO_IV_SIZE, hash.bytes, st->node_buf);
     if (r <= 0) {
-        errx(1, "failed decrypting node");
+        errx(1, "failed to decrypt node %u", n);
     }
     return 0;
 }

@@ -71,6 +71,7 @@ typedef struct DubTree {
     int buffer_max;
     void *buffered;
     void *head_ch, *shared_ch;
+    chunk_id_t tree_chunk;
 
 } DubTree;
 
