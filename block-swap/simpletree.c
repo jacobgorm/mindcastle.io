@@ -143,18 +143,7 @@ void simpletree_open(SimpleTree *st, Crypto *crypto, int fd, hash_t hash)
     put_node(st, 0);
 }
 
-static void decrypt_node(SimpleTree *st, uint8_t *dst, const uint8_t *src, hash_t hash)
-{
-    //printf("decrypting with hash %016lx\n", hash.first64);
-    assert(hash.first64);
-    int r = decrypt256(st->crypto, dst, src + CRYPTO_IV_SIZE, SIMPLETREE_NODESIZE -
-            CRYPTO_IV_SIZE, hash.bytes, src);
-    if (r <= 0) {
-        errx(1, "failed decrypting node");
-    }
-}
-
-static int buffer_node(SimpleTree *st, node_t n)
+static int buffer_node(SimpleTree *st, node_t n, uint8_t *dst, hash_t hash)
 {
     int left = SIMPLETREE_NODESIZE;
     int offset = 0;
@@ -170,6 +159,13 @@ static int buffer_node(SimpleTree *st, node_t n)
         assert(r != 0);
         left -= r;
         offset += r;
+    }
+
+    assert(hash.first64);
+    int r = decrypt256(st->crypto, dst, st->node_buf + CRYPTO_IV_SIZE,
+            SIMPLETREE_NODESIZE - CRYPTO_IV_SIZE, hash.bytes, st->node_buf);
+    if (r <= 0) {
+        errx(1, "failed decrypting node");
     }
     return 0;
 }
@@ -196,8 +192,7 @@ void *simpletree_get_node(SimpleTree *st, node_t n, hash_t hash)
             hashtable_delete(&st->ht, cl->key);
         }
         ptr = st->cached_nodes + SIMPLETREE_NODESIZE * line;
-        buffer_node(st, n);
-        decrypt_node(st, ptr, st->node_buf, hash);
+        buffer_node(st, n, ptr, hash);
         cl->key = n;
         cl->value = (uintptr_t) ptr;
         cl->users = 1;
