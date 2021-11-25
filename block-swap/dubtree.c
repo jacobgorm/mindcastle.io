@@ -1395,6 +1395,7 @@ static inline void __put_chunk(DubTree *t, int line)
             CacheLineUserData *ud = &t->cache_infos[line];
             chunk_id = ud->chunk_id;
             f = ud->f;
+            ud->f = DUBTREE_INVALID_HANDLE;
             hashtable_delete(&t->ht, cl->key);
             delete = 1;
             memset(cl, 0, sizeof(*cl));
