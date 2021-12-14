@@ -272,7 +272,7 @@ int main(int argc, char **argv)
 
     if (argc >= 4 && !strcmp(argv[0], "-t")) {
         printf("writing read-trace to %s\n", argv[1]);
-        tracefile = fopen(argv[1], "wb");
+        tracefile = fopen(argv[1], "w");
         argc -= 2;
         argv += 2;
     }
