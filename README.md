@@ -23,7 +23,6 @@ To build on debian/ubuntu, you need to install:
 * ninja-build
 * liblz4-dev
 * libcurl4-gnutls-dev (or other libcurl-dev package, e.g, libcurl4-openssl-dev)
-* uuid-dev
 * libssl-dev
 
 And to run well you should have an entropy gathering service like rng-tools
