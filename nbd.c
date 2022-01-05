@@ -356,7 +356,7 @@ int main(int argc, char **argv)
                     err(1, "device ioctl (c) failed");
                 }
 
-                r = ioctl(device, NBD_SET_FLAGS, NBD_FLAG_SEND_FLUSH || NBD_FLAG_SEND_TRIM);
+                r = ioctl(device, NBD_SET_FLAGS, NBD_FLAG_SEND_FLUSH); // || NBD_FLAG_SEND_TRIM);
                 if (r) {
                     err(1, "device ioctl (c) failed");
                 }
