@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 typedef struct LruCacheLine {
-    uintptr_t key;
+    uint64_t key;
     uintptr_t value;
     int users;
     int delete;
