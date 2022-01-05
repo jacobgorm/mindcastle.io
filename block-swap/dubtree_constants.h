@@ -19,7 +19,6 @@
 
 typedef union {
     uint64_t first64;
-    __uint128_t first128;
     uint8_t bytes[128 / 8];
 }__attribute__((__packed__)) hash_t;
 

@@ -96,7 +96,7 @@ int main(int argc, char **argv)
     uint64_t total = 0;
 
     for (;;) {
-        if (fscanf(tracefile, "%lx %x\n", &sector, &len) == 2) {
+        if (fscanf(tracefile, "%" PRIx64 " %x\n", &sector, &len) == 2) {
 
             uint8_t *buf = malloc(512 * len);
             swap_aio_read(&bs, sector, buf, len, io_done, NULL);
@@ -112,6 +112,6 @@ int main(int argc, char **argv)
     swap_flush(&bs, flush_complete, &close_event);
     pthread_join(tid, NULL);
     swap_close(&bs);
-    printf("primed %lu MiB\n", total / 2);
+    printf("primed %" PRIu64 " MiB\n", total / 2);
     return 0;
 }

@@ -828,7 +828,7 @@ static int swap_write_header(BDRVSwapState *s, uuid_t uuid, const char *fn)
     char uuid_str[37];
     tiny_uuid_unparse(uuid, uuid_str);
     fprintf(f, "uuid=%s\n", uuid_str);
-    fprintf(f, "size=%lu\n", s->size);
+    fprintf(f, "size=%" PRIu64 "\n", s->size);
 
     if (s->swapdata) {
         fprintf(f, "swapdata=%s\n", s->swapdata);

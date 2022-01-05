@@ -176,7 +176,7 @@ ssize_t dubtree_pread(dubtree_handle_t f, void *buf, size_t sz, uint64_t offset)
             r = pread(f->fd, b, left, offset);
         } while (r < 0 && errno == EINTR);
         if (r <= 0) {
-            err(1, "pread %p+%lx failed", b, offset);
+            err(1, "pread %p+%" PRIx64 " failed", b, offset);
         }
         left -= r;
         b += r;

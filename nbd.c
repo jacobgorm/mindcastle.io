@@ -190,7 +190,7 @@ static void got_data(void *opaque)
                 ri->reply = reply;
 
                 if (tracefile) {
-                    fprintf(tracefile, "%lx %x\n", offset / 512, len / 512);
+                    fprintf(tracefile, "%" PRIx64 " %x\n", offset / 512, len / 512);
                 }
                 swap_aio_read(ci->bs, offset / 512, ri->buffer, len / 512, nbd_read_done, ri);
                 break;

@@ -1131,7 +1131,7 @@ static chunk_id_t file_content_id(int fd, size_t size)
 
 static size_t curl_data_cb(void *ptr, size_t size, size_t nmemb, void *opaque)
 {
-    //printf("%s %lu\n", __FUNCTION__, (int) size *nmemb);
+    //printf("%s %zu\n", __FUNCTION__, size * nmemb);
     int done = 0;
     int r;
     HttpGetState *hgs = opaque;
@@ -2038,7 +2038,7 @@ int dubtree_sanity_check(DubTree *t)
         simpletree_begin(&st, &it);
         cud = simpletree_get_user(&st);
         printf("check level %d\n", i);
-        printf("level %d has %d chunks, garbage=%lu\n", i, cud->num_chunks, cud->garbage);
+        printf("level %d has %d chunks, garbage=%" PRIu64 "\n", i, cud->num_chunks, cud->garbage);
         int idx = -1;
         while (!simpletree_at_end(&st, &it)) {
             SimpleTreeResult k;
