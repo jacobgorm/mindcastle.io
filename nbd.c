@@ -292,7 +292,7 @@ int main(int argc, char **argv)
 
     int needs_format = 0;
     if (!file_exists(fn)) {
-        r = swap_create(fn, 100 << 20, 0);
+        r = swap_create(fn, 1024ULL << 30ULL, 0);
         if (r < 0) {
             printf("error creating %s\n", fn);
             exit(1);
@@ -341,14 +341,20 @@ int main(int argc, char **argv)
                 ok = 1;
                 r = safe_write(sp2[1], &ok, sizeof(ok));
 
-                r = ioctl(device, NBD_SET_SIZE_BLOCKS, 1000 << 20);
-                if (r) {
-                    err(1, "device ioctl (a) failed");
-                }
-
                 r = ioctl(device, NBD_SET_BLKSIZE, 0x1000);
                 if (r) {
                     err(1, "device ioctl (b) failed");
+                }
+
+                size_t swap_size = 0;
+                r = swap_getsize(&bs, &swap_size);
+                if (r< 0) {
+                    errx(1, "swap_getsize failed!");
+                }
+
+                r = ioctl(device, NBD_SET_SIZE_BLOCKS, swap_size / 0x1000);
+                if (r) {
+                    err(1, "device ioctl (a) failed");
                 }
 
                 r = ioctl(device, NBD_SET_TIMEOUT, 120);

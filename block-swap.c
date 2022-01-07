@@ -1854,6 +1854,15 @@ int swap_snapshot(BlockDriverState *bs, uuid_t uuid)
     return r;
 }
 
+int swap_getsize(BlockDriverState *bs, uint64_t *result) {
+    BDRVSwapState *s = (BDRVSwapState*) bs->opaque;
+    if (result) {
+        *result = s->size;
+        return 0;
+    } else {
+        return -1;
+    }
+}
 
 int swap_ioctl(BlockDriverState *bs, unsigned long int req, void *buf)
 {

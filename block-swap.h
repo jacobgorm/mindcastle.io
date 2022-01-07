@@ -33,5 +33,6 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags);
 int swap_remove(BlockDriverState *bs);
 int swap_ioctl(BlockDriverState *bs, unsigned long int req, void *buf);
 int swap_snapshot(BlockDriverState *bs, uuid_t uuid);
+int swap_getsize(BlockDriverState *bs, uint64_t *result);
 
 #endif /* __BLOCK_SWAP_H__ */
