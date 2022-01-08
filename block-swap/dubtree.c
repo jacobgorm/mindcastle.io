@@ -1553,6 +1553,10 @@ out:
 
 static inline int chunk_exceeded(uint64_t hash, size_t size)
 {
+    /* cap .lvl file sizes due to max 24 bit offsets in simpletree! */
+    if (size >= 8 << 20) {
+        return 1;
+    }
     int p = __builtin_clzll((uint64_t) size);
     int q = __builtin_ffsll(hash);
     /* K is a tunable parameter to affect avg chunk sizes,
