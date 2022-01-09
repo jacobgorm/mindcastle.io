@@ -341,7 +341,7 @@ int main(int argc, char **argv)
                 ok = 1;
                 r = safe_write(sp2[1], &ok, sizeof(ok));
 
-                r = ioctl(device, NBD_SET_BLKSIZE, 0x1000);
+                r = ioctl(device, NBD_SET_BLKSIZE, 512);
                 if (r) {
                     err(1, "device ioctl (b) failed");
                 }
@@ -352,7 +352,7 @@ int main(int argc, char **argv)
                     errx(1, "swap_getsize failed!");
                 }
 
-                r = ioctl(device, NBD_SET_SIZE_BLOCKS, swap_size / 0x1000);
+                r = ioctl(device, NBD_SET_SIZE_BLOCKS, swap_size / 512);
                 if (r) {
                     err(1, "device ioctl (a) failed");
                 }
