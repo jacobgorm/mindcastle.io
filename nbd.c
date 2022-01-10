@@ -262,6 +262,8 @@ static void signal_handler(int s)
 int main(int argc, char **argv)
 {
     int r;
+    uint64_t size_gb = 1024;
+
     if (argc < 3) {
         fprintf(stderr, "Usage: %s [filename.swap] [statechange-script]\n", argv[0]);
         exit(1);
@@ -276,6 +278,13 @@ int main(int argc, char **argv)
         argc -= 2;
         argv += 2;
     }
+
+    if (argc >= 4 && !strcmp(argv[0], "-s")) {
+        size_gb = atoll(argv[1]);
+        argc -= 2;
+        argv += 2;
+    }
+
     char *script = argv[1];
 
     shell("/sbin/modprobe", "nbd", NULL);
@@ -292,7 +301,7 @@ int main(int argc, char **argv)
 
     int needs_format = 0;
     if (!file_exists(fn)) {
-        r = swap_create(fn, 1024ULL << 30ULL, 0);
+        r = swap_create(fn, size_gb << 30ULL, 0);
         if (r < 0) {
             printf("error creating %s\n", fn);
             exit(1);
