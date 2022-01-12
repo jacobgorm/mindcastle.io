@@ -104,7 +104,7 @@ and the user can do this too. For example, to trigger a clean unmount and
 shutdown, just do a
 
 ```bash
-kill -1 PID
+kill -HUP PID
 ```
 
 Where PID is that of the first mindcastle process, you should see this logged
@@ -114,7 +114,7 @@ details.
 ## Creating snapshots
 You can cause mindcastle the device to be snapshotted with:
 ```bash
-kill -3 PID
+kill -USR1 PID
 ```
 
 The snapshot will appear as a separate .swap file with a new UUID, and an

@@ -20,7 +20,7 @@ create)
     ;;
 
 open)
-    (mkdir -p $MNT && mount -oexec,dev,discard $DEVICE $MNT) || (rm -rf $MNT; kill -2 $PID)
+    (mkdir -p $MNT && mount -oexec,dev,discard $DEVICE $MNT) || (rm -rf $MNT; kill -INT $PID)
     ;;
 
 snapshot)
@@ -28,7 +28,7 @@ snapshot)
     ;;
 
 close)
-    umount $MNT && rm -rf $MNT && kill -2 $PID
+    umount $MNT && rm -rf $MNT && kill -INT $PID
     ;;
 
 esac

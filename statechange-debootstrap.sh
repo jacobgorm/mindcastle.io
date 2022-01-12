@@ -16,14 +16,14 @@ create)
     ;;
 
 open)
-    (mkdir -p $MNT && mount -oexec,dev,discard $DEVICE $MNT) || (rm -rf $MNT; kill -2 $PID)
+    (mkdir -p $MNT && mount -oexec,dev,discard $DEVICE $MNT) || (rm -rf $MNT; kill -INT $PID)
     #debootstrap --arch=arm64 stable $MNT
     debootstrap stable $MNT
-    kill -1 $PID
+    kill -HUP $PID
     ;;
 
 close)
-    umount $MNT && rm -rf $MNT && kill -2 $PID
+    umount $MNT && rm -rf $MNT && kill -INT $PID
     ;;
 
 esac

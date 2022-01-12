@@ -13,13 +13,13 @@ open)
     mkdir -p $MNT &&
     mount -oexec,dev,discard $DEVICE $MNT &&
     rsync --chown=root:root -av --delete tmp/ $MNT
-    kill -1 $PID
+    kill -HUP $PID
     ;;
 
 close)
     echo unmounting $MNT
     umount -f $MNT && rm -rf $MNT
-    kill -2 $PID
+    kill -HUP $PID
     ;;
 
 esac
