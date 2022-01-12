@@ -563,8 +563,7 @@ swap_write_thread(void *_s)
     uint64_t *keys = NULL;
     uint32_t *sizes = NULL;
     uint32_t total_size = 0;
-    int max = 0;
-    int n = 0;
+    size_t n = 0;
 
     swap_signal_can_write(s);
 
@@ -640,7 +639,7 @@ wait:
             cbuf = NULL;
             keys = NULL;
             sizes = NULL;
-            max = n = 0;
+            n = 0;
             total_size = 0;
         }
 
@@ -652,18 +651,18 @@ wait:
             cbuf = swap_malloc(s, max_sz);
         }
 
-        if (n == max) {
-            max = max ? 2 * max : 1;
-            keys = realloc(keys, sizeof(keys[0]) * max);
-            sizes = realloc(sizes, sizeof(sizes[0]) * max);
-        }
-
         /* The skip check above only works for duplicates already queued,
          * not ones that could arrive when not holding lock. So we have to
          * re-check here. */
         if (n && keys[n - 1] == key) {
             --n;
             total_size -= sizes[n];
+        }
+
+        if (!((n - 1) & n)) {
+            size_t max = (n ? 2 * n : 1);
+            keys = realloc(keys, sizeof(keys[0]) * max);
+            sizes = realloc(sizes, sizeof(sizes[0]) * max);
         }
 
         keys[n] = key;
@@ -674,16 +673,12 @@ wait:
             size = swap_set_key(cbuf + total_size, ptr);
         }
 
-        /* error
-         *
-         * this is nasty. We are doing it to be able to free ptr below, and instead set the
-         * HT to point to the compressed version. Unfortunately we have nowhere to store the
-         * hash (signature) so we cannot decrypt it, should we need to look it up for read... */
+        /* This is nasty. We are doing it to be able to free ptr below, and instead set the
+         * HT to point to the compressed version. */
 
         swap_lock(s);
         e = hashtable_find_entry(&s->busy_blocks, key);
         if (e && e->value == value) {
-//#error "how will we know the hash to decrypt this with??"
             e->value = (((uint64_t ) size) << SWAP_SIZE_SHIFT) |
                 (uintptr_t) (cbuf + total_size);
         }
