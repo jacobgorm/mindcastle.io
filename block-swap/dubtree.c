@@ -1812,6 +1812,8 @@ int dubtree_insert(DubTree *t, int num_keys, uint64_t* keys,
         /* Anything to flush from current chunk before we switch to another one? */
         if (t_buffered && (done || chunk_exceeded(hash_state.hash, t_buffered))) {
 
+            /* Write buffered data with look-aside to incoming encrypted_values values,
+             * which will be merged in as needed. */
             write_chunk(t, &ud->chunk_ids[out_chunk], &out, encrypted_values, t_buffered);
             clear_chunk(&out);
             out_chunk = -1;
