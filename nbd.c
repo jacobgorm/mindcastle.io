@@ -262,7 +262,7 @@ static void signal_handler(int s)
 int main(int argc, char **argv)
 {
     int r;
-    uint64_t size_gb = 1024;
+    uint64_t size_gb = 100;
 
     if (argc < 3) {
         fprintf(stderr, "Usage: %s [filename.swap] [statechange-script]\n", argv[0]);
