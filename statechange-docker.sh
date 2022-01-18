@@ -19,7 +19,7 @@ open)
 close)
     echo unmounting $MNT
     umount -f $MNT && rm -rf $MNT
-    kill -HUP $PID
+    kill -INT $PID
     ;;
 
 esac
