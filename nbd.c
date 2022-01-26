@@ -45,14 +45,14 @@ struct client_info {
 };
 
 struct read_info {
-    struct client_info *ci;
+    int sock;
     uint8_t *buffer;
     int len;
     struct nbd_reply reply;
 };
 
 struct flush_info {
-    struct client_info *ci;
+    int sock;
     struct nbd_reply reply;
 };
 
@@ -97,16 +97,15 @@ static pid_t shell(char *arg, ...) {
 static void nbd_read_done(void *opaque, int ret) {
     int r;
     struct read_info *ri = opaque;
-    struct client_info *ci = ri->ci;
 
-    r = safe_write(ci->sock, &ri->reply, sizeof(ri->reply));
+    r = safe_write(ri->sock, &ri->reply, sizeof(ri->reply));
     if (r != sizeof(ri->reply)) {
-        err(1, "sock write (a) failed");
+        err(1, "sock write (a) failed, sock=%d", ri->sock);
     }
 
-    r = safe_write(ci->sock, ri->buffer, ri->len);
+    r = safe_write(ri->sock, ri->buffer, ri->len);
     if (r != ri->len) {
-        err(1, "sock write (b) failed");
+        err(1, "sock write (b) failed, sock=%d", ri->sock);
     }
 
     free(ri->buffer);
@@ -119,10 +118,9 @@ static void nbd_write_done(void *buffer, int ret) {
 
 static void nbd_flush_done(void *opaque, int ret) {
     struct flush_info *fi = opaque;
-    struct client_info *ci = fi->ci;
-    int r = safe_write(ci->sock, &fi->reply, sizeof(fi->reply));
+    int r = safe_write(fi->sock, &fi->reply, sizeof(fi->reply));
     if (r != sizeof(fi->reply)) {
-        err(1, "sock write (c) failed");
+        err(1, "sock write (c) failed, sock=%d", fi->sock);
     }
     free(fi);
 }
@@ -169,7 +167,7 @@ static void got_data(void *opaque)
 
             case NBD_CMD_FLUSH: {
                 struct flush_info *fi = malloc(sizeof(struct read_info));
-                fi->ci = ci;
+                fi->sock = ci->sock;
                 fi->reply = reply;
                 swap_flush(ci->bs, nbd_flush_done, fi);
                 break;
@@ -184,7 +182,7 @@ static void got_data(void *opaque)
                 int len = ntohl(request.len);
                 uint64_t offset =  be64toh(request.from);
                 struct read_info *ri = malloc(sizeof(struct read_info));
-                ri->ci = ci;
+                ri->sock = ci->sock;
                 ri->buffer = malloc(len);
                 ri->len = len;
                 ri->reply = reply;
