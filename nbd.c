@@ -85,7 +85,11 @@ static pid_t shell(char *arg, ...) {
         }
         va_end(ap);
         list[l] = NULL;
-        if (execvp(list[0], list)) {
+        char *rp = realpath(list[0], NULL);
+        if (!rp) {
+            err(1, "realpath failed for %s", list[0]);
+        }
+        if (execvp(rp, list)) {
             err(1, "execvp error");
         }
         exit(0);
