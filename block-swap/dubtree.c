@@ -1570,7 +1570,7 @@ static inline int chunk_exceeded(uint64_t hash, size_t size)
     /* K is a tunable parameter to affect avg chunk sizes,
      * increase to make chunks smaller */
     const int K = 33;
-    return p < q + K;
+    return p < K + 2 * q;
 }
 
 #define HASH_WINDOW 32
