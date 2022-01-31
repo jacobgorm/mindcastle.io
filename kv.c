@@ -18,6 +18,7 @@
 static const int MAX_PENDING = 64; // times 8GiB
 
 static void io_done(void *opaque, int ret) {
+    (void) ret;
     char msg = 0;
     struct kv *kv = opaque;
     int r = write(kv->fds[1], &msg, sizeof(msg));
@@ -36,6 +37,7 @@ static void wait(struct kv *kv) {
 
 static void *kv_aio_thread(void *bs)
 {
+    (void) bs;
     for (;;) {
         aio_wait();
     }
@@ -278,7 +280,7 @@ int kv_find(struct kv *kv, uint8_t **rptr, size_t *rsize, uint64_t key) {
         } while (r == -EAGAIN);
         wait(kv);
         int offset = 0;
-        for (int i = 0; i < range; ++i) {
+        for (uint64_t i = 0; i < range; ++i) {
             kv->offsets[i] = offset;
             offset += kv->sizes[i];
         }
@@ -308,7 +310,7 @@ int kv_save(struct kv *kv, char *buffer, size_t size) {
     b += sprintf(b, "snaphash=%s\n", tmp);
     b += sprintf(b, "kvdata=%s\n", kv->kvdata);
     kv->saved = 1;
-    assert(b - buffer <= size);
+    assert((size_t) (b - buffer) <= size);
     return b - buffer;
 }
 

@@ -25,6 +25,8 @@ DECLARE_PROGNAME;
 static int fds[2];
 
 static void io_done(void *opaque, int ret) {
+    (void) opaque;
+    (void) ret;
     char msg = 0;
     int r = write(fds[1], &msg, sizeof(msg));
     if (r != 1) {
@@ -51,6 +53,7 @@ static void close_event_cb(void *opaque)
 
 static void *disk_swap_thread(void *bs)
 {
+    (void) bs;
     while (!can_exit) {
         aio_wait();
     }
@@ -58,6 +61,7 @@ static void *disk_swap_thread(void *bs)
 }
 
 static void flush_complete(void *opaque, int ret) {
+    (void) ret;
     ioh_event *event = (ioh_event *) opaque;
     ioh_event_set(event);
 }

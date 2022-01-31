@@ -91,6 +91,7 @@ dubtree_open_new(const char *fn, int temp)
             0, NULL,
             OPEN_ALWAYS, flags, NULL);
 #else
+    (void) temp;
     return make_handle(open(fn, O_RDWR | O_CREAT | O_EXCL, 0644));
 #endif
 }

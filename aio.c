@@ -72,7 +72,7 @@ static void aio_init_curl(struct curl_state *cs) {
 }
 
 void aio_global_init(void) {
-    for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
+    for (size_t i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
         AioEntry *e = &aios[i];
         memset(e, 0, sizeof(*e));
         e->fd = -1;
@@ -83,7 +83,7 @@ void aio_global_init(void) {
 }
 
 void aio_add_wait_object(int fd, void (*cb) (void *opaque), void *opaque) {
-    for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
+    for (size_t i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
         AioEntry *e = &aios[i];
         if (e->fd == -1 && __sync_bool_compare_and_swap(&e->fd, -1, fd)) {
             e->cb = cb;
@@ -96,7 +96,7 @@ void aio_add_wait_object(int fd, void (*cb) (void *opaque), void *opaque) {
 }
 
 void aio_suspend_wait_object(int fd) {
-    for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
+    for (size_t i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
         AioEntry *e = &aios[i];
         if (e->fd == fd) {
             __sync_bool_compare_and_swap(&e->suspended, 0, 1);
@@ -107,7 +107,7 @@ void aio_suspend_wait_object(int fd) {
 }
 
 void aio_resume_wait_object(int fd) {
-    for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
+    for (size_t i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
         AioEntry *e = &aios[i];
         if (e->fd == fd) {
             __sync_bool_compare_and_swap(&e->suspended, 1, 0);
@@ -147,12 +147,15 @@ extern void dump_swapstat(void);
 void dubtree_cleanup_curl_handle(CURL *ch);
 
 static int curl_timer_callback(CURLM *cmd, long timeout_ms, void *userp) {
+    (void) cmd;
     *((long *) userp) = timeout_ms;
     return 0;
 }
 
 static int curl_socket_cb(CURL *ch, curl_socket_t s, int what, void *opaque, void *sockp)
 {
+    (void) ch;
+    (void) sockp;
     assert(s < FD_SETSIZE);
     struct curl_state *cs = opaque;
     if (what == CURL_POLL_REMOVE) {
@@ -189,7 +192,7 @@ void aio_wait(void) {
 
     max = max > ioh_fd() ? max : ioh_fd();
     FD_SET(ioh_fd(), &readset);
-    for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
+    for (size_t i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
         AioEntry *e = &aios[i];
         int fd = e->fd;
         if (fd >= 0 && !e->suspended) {
@@ -240,7 +243,7 @@ void aio_wait(void) {
         if (FD_ISSET(ioh_fd(), &readset)) {
             ioh_service();
         }
-        for (int i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
+        for (size_t i = 0; i < sizeof(aios) / sizeof(aios[0]); ++i) {
             AioEntry *e = &aios[i];
             int fd = e->fd;
             if (fd >= 0 && FD_ISSET(fd, &readset)) {

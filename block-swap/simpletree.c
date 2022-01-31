@@ -445,6 +445,7 @@ static inline int less_than(
         const SimpleTree *st,
         const SimpleTreeInternalKey *a, const SimpleTreeInternalKey *b)
 {
+    (void) st;
     return (a->key < b->key);
 }
 
@@ -481,7 +482,7 @@ int simpletree_find(SimpleTree *st, uint64_t key, SimpleTreeIterator *it)
 
     while (n) {
 
-        int pos;
+        uint32_t pos;
         node_t next;
         SimpleTreeNode *sn = get_node_hash(st, n, hash);
         int type = sn->type;

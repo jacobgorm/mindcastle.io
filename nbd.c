@@ -99,6 +99,7 @@ static pid_t shell(char *arg, ...) {
 }
 
 static void nbd_read_done(void *opaque, int ret) {
+    (void) ret;
     int r;
     struct read_info *ri = opaque;
 
@@ -117,10 +118,12 @@ static void nbd_read_done(void *opaque, int ret) {
 }
 
 static void nbd_write_done(void *buffer, int ret) {
+    (void) ret;
     free(buffer);
 }
 
 static void nbd_flush_done(void *opaque, int ret) {
+    (void) ret;
     struct flush_info *fi = opaque;
     int r = safe_write(fi->sock, &fi->reply, sizeof(fi->reply));
     if (r != sizeof(fi->reply)) {
@@ -130,11 +133,13 @@ static void nbd_flush_done(void *opaque, int ret) {
 }
 
 static void nbd_final_flush_done(void *opaque, int ret) {
+    (void) ret;
     ioh_event *event = (ioh_event *) opaque;
     ioh_event_set(event);
 }
 
 static void nbd_snapshot_flush_done(void *opaque, int ret) {
+    (void) ret;
     struct snapshot_info *si = opaque;
     (void) si;
 

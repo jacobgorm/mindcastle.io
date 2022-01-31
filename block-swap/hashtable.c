@@ -12,10 +12,9 @@ static int insert(HashTable *ht, HashEntry *bounce);
 static inline
 uint32_t get_hash(uint32_t *noise, uint64_t x)
 {
-    int i;
     uint32_t h = 0;
 
-    for (i = 0; i < sizeof(x); ++i) {
+    for (size_t i = 0; i < sizeof(x); ++i) {
         h ^= noise[0x100 * i + (x&0xff)];
         x >>= 8;
     }
@@ -31,7 +30,6 @@ uint32_t hash_n(HashTable *ht, uint64_t in, int level)
 
 static int rebuild(HashTable *ht, HashEntry bounce)
 {
-    int i;
     int retries = 0;
 
 retry:
@@ -72,7 +70,7 @@ retry:
     }
 
     /* Rebuild hash table in-place, using newly seeded hash functions. */
-    for (i = 0; i < (1 << ht->bits); ++i) {
+    for (uint32_t i = 0; i < (1U << ht->bits); ++i) {
         bounce = ht->table[i];
 
         if (bounce.present && hash_n(ht, bounce.key, bounce.level) != i) {

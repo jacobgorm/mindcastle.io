@@ -25,7 +25,7 @@ typedef struct SimpleTreeMetaNode {
  * during tree construction. */
 
 typedef struct SimpleTree {
-    int leaf_m;
+    uint32_t leaf_m;
     node_t nodes[16];
     node_t prev;
     uint8_t *mem;
@@ -82,7 +82,7 @@ typedef struct SimpleTreeInnerNode {
 } SimpleTreeInnerNode ;
 
 typedef struct SimpleTreeLeafNode {
-    int count;
+    uint32_t count;
     node_t next;
     hash_t next_hash;
     SimpleTreeInternalKey keys[0];
@@ -206,6 +206,7 @@ static inline void simpletree_next(SimpleTree *st, SimpleTreeIterator *it)
 
 static inline int simpletree_at_end(SimpleTree *st, SimpleTreeIterator *it)
 {
+    (void) st;
     return (it->node == 0);
 }
 

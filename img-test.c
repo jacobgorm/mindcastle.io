@@ -53,12 +53,11 @@ DECLARE_PROGNAME;
  * will get average compression out of LZ4. */
 void gen(uint64_t seed, int version, uint8_t *out)
 {
-    int i;
     uint32_t *o = (uint32_t*) out;
     seed ^= (1117 * version);
 
     int mod = (1 + (seed % 800));
-    for (i = 0; i < BDRV_SECTOR_SIZE / sizeof(uint32_t); ++i) {
+    for (size_t i = 0; i < BDRV_SECTOR_SIZE / sizeof(uint32_t); ++i) {
         *o++ = i % mod;
     }
     *((uint64_t *) out) = seed;
@@ -73,12 +72,11 @@ void cmp(uint64_t sector, int ver, uint8_t *buf, uint8_t *buf2)
         printf("looks like perhaps sector %"PRIx64" from block %"PRIx64"\n",
                 perhaps, perhaps / 8);
 
-        int i;
-        for (i = 0; i < BDRV_SECTOR_SIZE; i += 32) {
+        for (size_t i = 0; i < BDRV_SECTOR_SIZE; i += 32) {
 
             if (memcmp(buf + i, buf2 + i, 32)) {
                 int j;
-                printf("i=%x\n", i);
+                printf("i=%zx\n", i);
                 for (j = 0; j < 32; ++j) {
                     printf("%02x ", buf[i + j]);
                 }
@@ -125,6 +123,8 @@ static inline void seq(uint64_t *s, uint32_t *l, int align)
 static int fds[2];
 
 static void io_done(void *opaque, int ret) {
+    (void) opaque;
+    (void) ret;
     char msg = 0;
     int r = write(fds[1], &msg, sizeof(msg));
     if (r != 1) {
@@ -150,12 +150,14 @@ static void close_event_cb(void *opaque)
 }
 
 static void flush_complete(void *opaque, int ret) {
+    (void) ret;
     ioh_event *event = (ioh_event *) opaque;
     ioh_event_set(event);
 }
 
 static void *disk_swap_thread(void *bs)
 {
+    (void) bs;
     while (!can_exit) {
         aio_wait();
     }
@@ -185,7 +187,7 @@ int main(int argc, char **argv)
 
     const char *dst = argv[1];
 
-    int N = atoi(argv[2]);
+    size_t N = atoi(argv[2]);
     int R = atoi(argv[3]);
     int align = (!strcmp("align", argv[4]));
 
@@ -204,7 +206,7 @@ int main(int argc, char **argv)
     uint8_t *b;
     uint64_t sector;
     uint32_t len;
-    int i, j;
+    size_t i, j;
     uint32_t total_sectors;
 
     int round = 0;

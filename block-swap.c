@@ -334,7 +334,7 @@ size_t swap_set_key(void *out, const void *in)
     swap_stats.compressed += DUBTREE_BLOCK_SIZE;
 #endif
 
-    int size = LZ4_compress_default((const char*)in, (char*) out, DUBTREE_BLOCK_SIZE, DUBTREE_BLOCK_SIZE * 2);
+    size_t size = LZ4_compress_default((const char*)in, (char*) out, DUBTREE_BLOCK_SIZE, DUBTREE_BLOCK_SIZE * 2);
     if (size >= DUBTREE_BLOCK_SIZE) {
         memcpy(out, in, DUBTREE_BLOCK_SIZE);
         size = DUBTREE_BLOCK_SIZE;
@@ -734,7 +734,6 @@ static char *strsep(char **stringp, const char *delim)
 
 static int swap_read_header(BDRVSwapState *s)
 {
-    ssize_t got;
     FILE *file;
     char *buff;
     size_t len;
@@ -762,8 +761,8 @@ static int swap_read_header(BDRVSwapState *s)
         return -1;
     }
 
-    got = fread(buff, 1, len, file);
-    if (got < len) {
+    size_t got = fread(buff, 1, len, file);
+    if (got != len) {
         warn("swap: unable to read %s", s->filename);
         fclose(file);
         free(buff);
@@ -798,7 +797,7 @@ static int swap_read_header(BDRVSwapState *s)
         }
     }
     /* repair strsep damage */
-    for (int i = 0; i < len; ++i) {
+    for (size_t i = 0; i < len; ++i) {
         if (buff[i] == '\0') {
             buff[i] = '\n';
         }
@@ -877,6 +876,7 @@ char *swap_resolve_via_fallback(BDRVSwapState *s, const char *fn)
 
 int swap_open(BlockDriverState *bs, const char *filename, int flags)
 {
+    (void) flags;
     memset(bs, 0 , sizeof(*bs));
     BDRVSwapState *s = calloc(1, sizeof(BDRVSwapState));
     bs->opaque = s;
@@ -1020,7 +1020,7 @@ int swap_open(BlockDriverState *bs, const char *filename, int flags)
         &s->can_insert_event,
     };
 
-    for (i = 0; i < sizeof(events) / sizeof(events[0]); ++i) {
+    for (size_t i = 0; i < sizeof(events) / sizeof(events[0]); ++i) {
         thread_event *ev = events[i];
         if (thread_event_init(ev) < 0) {
             Werr(1, "swap: unable to create event!");
@@ -1216,7 +1216,7 @@ static void dubtree_read_complete_cb(void *opaque, int result)
 #ifdef SWAP_STATS
                 swap_stats.decompressed += DUBTREE_BLOCK_SIZE;
 #endif
-                uint8_t *dst = (count < SWAP_SECTOR_SIZE) ? tmp : o;
+                uint8_t *dst = (count < (int64_t) SWAP_SECTOR_SIZE) ? tmp : o;
                 r = swap_get_key(dst, t, sz);
                 if (r < 0) {
                     errx(1, "block decompression failed");
@@ -1506,11 +1506,10 @@ static int queue_write(BDRVSwapState *s, uint64_t key, uint64_t value)
 static int __swap_nonblocking_write(BDRVSwapState *s, const uint8_t *buf,
                                         uint64_t block, size_t size, int dirty)
 {
-    int i;
     LruCache *bc = &s->bc;
     int n = 0;
 
-    for (i = 0; i < size / SWAP_SECTOR_SIZE; ++i) {
+    for (size_t i = 0; i < size / SWAP_SECTOR_SIZE; ++i) {
 
         uint8_t *b;
         uint64_t line;
@@ -1768,6 +1767,7 @@ void swap_close(BlockDriverState *bs)
 int swap_create(const char *filename, int64_t size, int flags)
 {
     printf("%s\n", __FUNCTION__);
+    (void) flags;
     FILE *file;
     uuid_t uuid;
     char uuid_str[37];
