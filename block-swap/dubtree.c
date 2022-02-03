@@ -2054,6 +2054,7 @@ int dubtree_sanity_check(DubTree *t)
         printf("check level %d\n", i);
         printf("level %d has %d chunks, garbage=%" PRIu64 "\n", i, cud->num_chunks, cud->garbage);
         uint32_t idx = ~0U;
+        uint64_t decrypted = 0;
         while (!simpletree_at_end(&st, &it)) {
             SimpleTreeResult k;
             chunk_id_t chunk_id;
@@ -2076,6 +2077,18 @@ int dubtree_sanity_check(DubTree *t)
             }
             put_chunk(t, l);
 
+            uint8_t tmp[0x10000];
+            int size = k.value.size;
+            hash_t hash = k.value.hash;
+            int dsize = decrypt256(&crypto, tmp, in + CRYPTO_IV_SIZE, size - CRYPTO_IV_SIZE,
+                hash.bytes, in);
+            if (dsize <= 0) {
+                errx(1, "failed decrypting block %" PRIx64 ", size=%u, dsize=%d",
+                    k.key, size, dsize);
+            } else {
+                ++decrypted;
+            }
+
 #if 0
             int sz = k.value.size;
             int unsz = LZ4_decompress_safe((const char*)in, (char*)out,
@@ -2092,6 +2105,7 @@ int dubtree_sanity_check(DubTree *t)
         }
         next = cud->next;
         simpletree_close(&st);
+        printf("%" PRIu64 " key/values decrypted ok\n", decrypted);
     }
     crypto_close(&crypto);
     return 0;
