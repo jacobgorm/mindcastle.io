@@ -1218,7 +1218,7 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
         warn("unable to HEAD %s, %s!", url, curl_easy_strerror(r));
         return DUBTREE_INVALID_HANDLE;
     }
-    int response;
+    long response;
     curl_easy_getinfo(t->head_ch, CURLINFO_RESPONSE_CODE, &response);
     if (response != 200) {
         return DUBTREE_INVALID_HANDLE;
