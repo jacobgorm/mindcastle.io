@@ -1316,7 +1316,7 @@ static dubtree_handle_t prepare_sync_http_get(DubTree *t,
         warn("unable to HEAD %s, %s!", url, curl_easy_strerror(r));
         return DUBTREE_INVALID_HANDLE;
     }
-    int response;
+    long response;
     curl_easy_getinfo(t->head_ch, CURLINFO_RESPONSE_CODE, &response);
     if (response != 200) {
         return DUBTREE_INVALID_HANDLE;
@@ -1333,7 +1333,7 @@ static dubtree_handle_t prepare_sync_http_get(DubTree *t,
     hgs->url = strdup(url);
     hgs->is_buffering = 0;
     hgs->fd = -1;
-    dubtree_handle_t f = calloc(sizeof(dubtree_handle_t), 1);
+    dubtree_handle_t f = calloc(32, 1);
     f->fd = -1;
     f->opaque = hgs;
     return f;
