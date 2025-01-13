@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.4)
+cmake_minimum_required(VERSION 3.18)
 
 project("mindcastle" C)
 option(BUILD_PYKV "build pykv python3 extension" OFF)
@@ -60,8 +60,7 @@ if (BUILD_PYKV)
         block-swap/simpletree.c
         )
 
-    find_package(PythonInterp 3.0 REQUIRED)
-    find_package(PythonLibs 3.0 REQUIRED)
+    find_package(Python3 COMPONENTS Development.Module REQUIRED)
     add_library(pykv SHARED pykv.c)
     set_target_properties(
         pykv
@@ -70,12 +69,11 @@ if (BUILD_PYKV)
             OUTPUT_NAME pykv
             LINKER_LANGUAGE C
     )
+
     target_include_directories(pykv PUBLIC
-        ${PYTHON_INCLUDE_DIRS}
-        ${NUMPY_INCLUDE_DIR}
-        ${PROJECT_SOURCE_DIR}/src/headers
+        ${Python3_INCLUDE_DIRS}
         )
     target_link_libraries(pykv
-        ${PYTHON_LIBRARIES}
+        ${Python3_LIBRARIES}
         kv -lpthread -llz4 -luuid ${OPENSSL_LIBRARIES} ${CURL_LIBRARIES})
 endif()
