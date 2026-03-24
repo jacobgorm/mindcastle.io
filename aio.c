@@ -134,6 +134,7 @@ int aio_add_curl_handle(CURL *ch) {
             errx(1, "too many pending curl handles");
         }
         pending_chs[num_pending_chs++] = ch;
+        r = 0;
 #endif
     } else {
         errx(1, "%s %p\n", curl_multi_strerror(cr), cs->cmh);
