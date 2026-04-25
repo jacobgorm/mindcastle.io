@@ -23,11 +23,19 @@ open)
     (mkdir -p $MNT && mount -oexec,dev,discard $DEVICE $MNT) || (rm -rf $MNT; kill -INT $PID)
     ;;
 
-snapshot)
+snapshot-prepare)
+    echo $DEVICE is getting snapshotted
+    fsfreeze -f $MNT && echo $MNT frozen
+    kill -USR2 $PID
+    ;;
+
+snapshot-done)
     echo $DEVICE was snapshotted to UUID $SNAPSHOT_UUID
+    fsfreeze -u $MNT && echo $MNT unfrozen
     ;;
 
 close)
+    echo $DEVICE was closed
     umount $MNT && rm -rf $MNT && kill -INT $PID
     ;;
 

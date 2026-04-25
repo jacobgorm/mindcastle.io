@@ -29,6 +29,7 @@ extern void dump_swapstat(void);
 
 static FILE *tracefile = NULL;
 
+static char *statechange_script;
 static int should_exit = 0;
 static int should_close = 0;
 static int can_exit = 0;
@@ -58,7 +59,6 @@ struct flush_info {
 
 struct snapshot_info {
     struct BlockDriverState *bs;
-    char *script;
     int sock;
 };
 
@@ -151,7 +151,7 @@ static void nbd_snapshot_flush_done(void *opaque, int ret) {
     aio_resume_wait_object(si->sock);
 
     setenv("SNAPSHOT_UUID", uuid_str, 1);
-    shell(si->script, "snapshot", NULL);
+    shell(statechange_script, "snapshot-done", NULL);
     free(si);
 }
 
@@ -255,6 +255,8 @@ static void signal_handler(int s)
     } else if (s == SIGHUP) {
         ioh_event_set(&close_event);
     } else if (s == SIGUSR1) {
+        shell(statechange_script, "snapshot-prepare", NULL);
+    } else if (s == SIGUSR2) {
         ioh_event_set(&snapshot_event);
     } else if (s == SIGCHLD) {
         int wstatus;
@@ -272,7 +274,7 @@ int main(int argc, char **argv)
     uint64_t size_gb = 100;
 
     if (argc < 3) {
-        fprintf(stderr, "Usage: %s [filename.swap] [statechange-script]\n", argv[0]);
+        fprintf(stderr, "Usage: %s [filename.swap] [statechange-statechange_script]\n", argv[0]);
         exit(1);
     }
 
@@ -292,8 +294,7 @@ int main(int argc, char **argv)
         argv += 2;
     }
 
-    char *script = argv[1];
-
+    statechange_script = argv[1];
     shell("/sbin/modprobe", "nbd", NULL);
 
     r = mlockall(MCL_CURRENT | MCL_FUTURE);
@@ -402,7 +403,7 @@ int main(int argc, char **argv)
             break;
         }
     }
-    printf("configuring %s using %s\n", dev, script);
+    printf("configuring %s using %s\n", dev, statechange_script);
 
     struct client_info *ci = malloc(sizeof(struct client_info));
     ci->sock = sp[0];
@@ -435,6 +436,7 @@ int main(int argc, char **argv)
             case SIGHUP:
             case SIGINT:
             case SIGUSR1:
+            case SIGUSR2:
             case SIGCHLD:
                 sigaction(i, &sig, NULL);
                 break;
@@ -447,12 +449,12 @@ int main(int argc, char **argv)
     }
 
 
-    shell(script, needs_format ? "create" : "open", NULL);
+    shell(statechange_script, needs_format ? "create" : "open", NULL);
 
     while (!can_exit) {
         aio_wait();
         if (should_close) {
-            shell(script, "close", NULL);
+            shell(statechange_script, "close", NULL);
             should_close = 0;
         }
         if (should_exit) {
@@ -462,7 +464,6 @@ int main(int argc, char **argv)
         if (snapshot_requested) {
             struct snapshot_info *si = malloc(sizeof(struct snapshot_info));
             si->bs = &bs;
-            si->script = script;
             si->sock = ci->sock;
 
             aio_suspend_wait_object(ci->sock);
