@@ -435,7 +435,7 @@ static void prep_curl_handle(CURL *ch, const char *url, const char *ranges,
         void *opaque)
 {
     curl_easy_setopt(ch, CURLOPT_URL, url);
-    curl_easy_setopt(ch, CURLOPT_BUFFERSIZE, CURL_MAX_READ_SIZE);
+    curl_easy_setopt(ch, CURLOPT_BUFFERSIZE, (long) CURL_MAX_READ_SIZE);
     curl_easy_setopt(ch, CURLOPT_WRITEDATA, opaque);
     curl_easy_setopt(ch, CURLOPT_PRIVATE, opaque);
     curl_easy_setopt(ch, CURLOPT_SOCKOPTFUNCTION, curl_sockopt_cb);
@@ -1225,7 +1225,7 @@ static dubtree_handle_t prepare_http_get(DubTree *t,
         int synchronous, const char *url, chunk_id_t chunk_id)
 {
     curl_easy_setopt(t->head_ch, CURLOPT_URL, url);
-    curl_easy_setopt(t->head_ch, CURLOPT_NOBODY, 1);
+    curl_easy_setopt(t->head_ch, CURLOPT_NOBODY, 1L);
     CURLcode r = curl_easy_perform(t->head_ch);
     if (r != CURLE_OK) {
         warn("unable to HEAD %s, %s!", url, curl_easy_strerror(r));
