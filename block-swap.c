@@ -1697,14 +1697,17 @@ int swap_flush(BlockDriverState *bs, BlockDriverCompletionFunc *cb,
         cl->value = 0;
         cl->dirty = 0;
     }
+    uint32_t inflight = s->busy_blocks.load;
     swap_unlock(s);
     if (n) {
         debug_printf("swap: emptying %d cache lines\n", n);
         swap_signal_write(s);
-    } else {
+    } else if (inflight == 0) {
+        /* No dirty LRU lines and no in-flight inserts: nothing to wait for. */
         if (cb) {
             cb(opaque, 0);
         }
+        /* else: insert thread fires flush_complete_cb when busy_blocks hits zero. */
     }
     return 0;
 }
